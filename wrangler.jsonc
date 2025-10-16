@@ -1,0 +1,16 @@
+{
+  "compatibility_date": "2025-10-08",
+  "main": "src/index.ts",
+  "name": "replica-backend",
+  "upload_source_maps": true,
+  "observability": {
+    "enabled": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "replica_backend_db",
+      "database_id": "f6519a07-ce7c-406f-8880-0a2b15b6c5f8"
+    }
+  ]
+}
