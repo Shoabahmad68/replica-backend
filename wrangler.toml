@@ -1,0 +1,10 @@
+name = "replica-backend"
+main = "src/index.js"
+compatibility_date = "2024-10-17"
+
+[vars]
+NODE_ENV = "production"
+
+[[kv_namespaces]]
+binding = "REPLICA_DATA"
+id = "d8a7ce64c2174f039a5013e9356384e9"
