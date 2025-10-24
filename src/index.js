@@ -1,4 +1,4 @@
-// index.js — Full unified backend for Replica System
+// index.js — Corrected unified backend with flatRows support
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -8,137 +8,79 @@ export default {
       "Access-Control-Allow-Headers": "Content-Type, Authorization",
     };
 
-    if (request.method === "OPTIONS") return new Response(null, { headers: cors });
-    if (url.pathname === "/")
-      return new Response("Replica Unified Backend Active ✅", { headers: cors });
+    if (request.method === "OPTIONS")
+      return new Response(null, { headers: cors });
 
-    // ------------------ TEST ROUTE ------------------
-    if (url.pathname === "/api/test") {
+    if (url.pathname === "/")
+      return new Response("Replica Backend Active ✅", { headers: cors });
+
+    if (url.pathname === "/api/test")
       return new Response(
-        JSON.stringify({ status: "ok", message: "Backend Live", time: new Date().toISOString() }),
+        JSON.stringify({ status: "ok", time: new Date().toISOString() }),
         { headers: { "Content-Type": "application/json", ...cors } }
       );
-    }
 
-    // ------------------ MAIN PUSH ENDPOINT ------------------
+    // ------------ Main Upload Handler ------------
     if (url.pathname === "/api/push/tally" && request.method === "POST") {
       try {
         const ct = request.headers.get("content-type") || "";
         if (!ct.includes("application/json"))
-          return new Response("Invalid Content-Type", { status: 400, headers: cors });
+          return new Response("Invalid content-type", {
+            status: 400,
+            headers: cors,
+          });
 
         const body = await request.json();
-
-        // Incoming XMLs (may be missing)
-        const xmlSales = body.salesXml || "";
-        const xmlPurchase = body.purchaseXml || "";
-        const xmlMasters = body.mastersXml || "";
-        const xmlOutstanding = body.outstandingXml || "";
-
-        // Parser helper
-        const extractBlocks = (xml, tag) => xml.match(new RegExp(`<${tag}[\\s\\S]*?<\\/${tag}>`, "gi")) || [];
-        const getTag = (block, tag) => {
-          const match = block.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, "i"));
-          return match ? match[1].trim() : "";
+        const xmlBlocks = {
+          salesXml: body.salesXml || "",
+          purchaseXml: body.purchaseXml || "",
+          mastersXml: body.mastersXml || "",
+          outstandingXml: body.outstandingXml || "",
         };
 
-        // ---------- SALES ----------
-        const salesRows = [];
-        if (xmlSales && xmlSales.includes("<VOUCHER")) {
-          const vouchers = extractBlocks(xmlSales, "VOUCHER");
-          for (const v of vouchers) {
-            const amt = parseFloat(getTag(v, "AMOUNT") || "0");
-            const isPositive = getTag(v, "ISDEEMEDPOSITIVE");
-            const finalAmt = isPositive === "Yes" && amt > 0 ? -amt : amt;
-            salesRows.push({
-              "Voucher Type": getTag(v, "VOUCHERTYPENAME"),
-              Date: getTag(v, "DATE"),
-              Party: getTag(v, "PARTYNAME"),
-              Item: getTag(v, "STOCKITEMNAME"),
-              Qty: getTag(v, "BILLEDQTY"),
-              Amount: finalAmt,
-              State: getTag(v, "PLACEOFSUPPLY"),
-              Salesman: getTag(v, "BASICSALESNAME"),
-            });
+        const tags = ["VOUCHER", "LEDGER", "STOCKITEM", "GROUP"];
+        const parseXML = (xml) => {
+          const rows = [];
+          if (!xml || !xml.includes("<ENVELOPE>")) return rows;
+          const getVal = (b, t) => {
+            const m = b.match(new RegExp(`<${t}>([\\s\\S]*?)<\\/${t}>`, "i"));
+            return m ? m[1].trim() : "";
+          };
+          for (const tag of tags) {
+            const blocks = xml.match(
+              new RegExp(`<${tag}[\\s\\S]*?<\\/${tag}>`, "gi")
+            );
+            if (blocks) {
+              for (const b of blocks) {
+                let amt = parseFloat(getVal(b, "AMOUNT") || "0");
+                if (getVal(b, "ISDEEMEDPOSITIVE") === "Yes" && amt > 0)
+                  amt = -amt;
+                rows.push({
+                  "Voucher Type": getVal(b, "VOUCHERTYPENAME"),
+                  Date: getVal(b, "DATE"),
+                  Party: getVal(b, "PARTYNAME"),
+                  Item: getVal(b, "STOCKITEMNAME"),
+                  Qty: getVal(b, "BILLEDQTY"),
+                  Amount: amt,
+                  State: getVal(b, "PLACEOFSUPPLY"),
+                  Salesman: getVal(b, "BASICSALESNAME"),
+                });
+              }
+            }
           }
-        }
+          return rows;
+        };
 
-        // ---------- PURCHASE ----------
-        const purchaseRows = [];
-        if (xmlPurchase && xmlPurchase.includes("<VOUCHER")) {
-          const vouchers = extractBlocks(xmlPurchase, "VOUCHER");
-          for (const v of vouchers) {
-            purchaseRows.push({
-              "Voucher Type": getTag(v, "VOUCHERTYPENAME"),
-              Date: getTag(v, "DATE"),
-              Party: getTag(v, "PARTYNAME"),
-              Item: getTag(v, "STOCKITEMNAME"),
-              Qty: getTag(v, "BILLEDQTY"),
-              Amount: parseFloat(getTag(v, "AMOUNT") || "0"),
-              State: getTag(v, "PLACEOFSUPPLY"),
-              Salesman: getTag(v, "BASICSALESNAME"),
-            });
-          }
-        }
+        // parse all
+        const parsed = {
+          sales: parseXML(xmlBlocks.salesXml),
+          purchase: parseXML(xmlBlocks.purchaseXml),
+          masters: parseXML(xmlBlocks.mastersXml),
+          outstanding: parseXML(xmlBlocks.outstandingXml),
+        };
 
-        // ---------- MASTERS (LEDGERS + STOCK ITEMS) ----------
-        const masterRows = [];
-        if (xmlMasters && xmlMasters.includes("<LEDGER")) {
-          const ledgers = extractBlocks(xmlMasters, "LEDGER");
-          for (const l of ledgers) {
-            masterRows.push({
-              Type: "Ledger",
-              Name: getTag(l, "NAME"),
-              Opening: getTag(l, "OPENINGBALANCE"),
-              Closing: getTag(l, "CLOSINGBALANCE"),
-              Email: getTag(l, "EMAIL"),
-            });
-          }
-        }
-        if (xmlMasters && xmlMasters.includes("<STOCKITEM")) {
-          const stocks = extractBlocks(xmlMasters, "STOCKITEM");
-          for (const s of stocks) {
-            masterRows.push({
-              Type: "StockItem",
-              Name: getTag(s, "NAME"),
-              Opening: getTag(s, "OPENINGBALANCE"),
-              Closing: getTag(s, "CLOSINGBALANCE"),
-            });
-          }
-        }
-
-        // ---------- OUTSTANDING ----------
-        const outstandingRows = [];
-        if (xmlOutstanding && xmlOutstanding.includes("<LEDGER")) {
-          const ledgers = extractBlocks(xmlOutstanding, "LEDGER");
-          for (const l of ledgers) {
-            outstandingRows.push({
-              Party: getTag(l, "NAME"),
-              Closing: getTag(l, "CLOSINGBALANCE"),
-              Contact: getTag(l, "EMAIL"),
-            });
-          }
-        }
-
-        // ---------- अगर चारों XML खाली हों तो पुराना data retain करो ----------
-        const totalRecords =
-          salesRows.length + purchaseRows.length + masterRows.length + outstandingRows.length;
-        if (totalRecords === 0) {
-          const oldData = await env.REPLICA_DATA.get("latest_tally_json");
-          return new Response(
-            JSON.stringify({
-              success: false,
-              message: "Empty data skipped. Old data retained.",
-              oldData: !!oldData,
-              time: new Date().toISOString(),
-            }),
-            { headers: { "Content-Type": "application/json", ...cors } }
-          );
-        }
-
-        // ---------- Excel-style header structure ----------
         const blank = {};
-        const salesHeader = {
+        const header = {
           "Voucher Type": "Voucher Type",
           Date: "Date",
           Party: "Party",
@@ -148,73 +90,65 @@ export default {
           State: "State",
           Salesman: "Salesman",
         };
-        const purchaseHeader = { ...salesHeader };
-        const masterHeader = {
-          Type: "Type",
-          Name: "Name",
-          Opening: "Opening",
-          Closing: "Closing",
-          Email: "Email",
+
+        // Correct structure (object, not string)
+        const payload = {
+          status: "ok",
+          time: new Date().toISOString(),
+          rows: {
+            sales: [blank, header, ...parsed.sales],
+            purchase: [blank, header, ...parsed.purchase],
+            masters: [blank, header, ...parsed.masters],
+            outstanding: [blank, header, ...parsed.outstanding],
+          },
         };
-        const outstandingHeader = {
-          Party: "Party",
-          Closing: "Closing",
-          Contact: "Contact",
-        };
 
-const combinedPayload = {
-  status: "ok",
-  time: new Date().toISOString(),
-  rows: {
-    sales: [blank, salesHeader, ...salesRows],
-    purchase: [blank, purchaseHeader, ...purchaseRows],
-    masters: [blank, masterHeader, ...masterRows],
-    outstanding: [blank, outstandingHeader, ...outstandingRows],
-  },
-};
+        // backward compatibility for frontend
+        payload.flatRows = [
+          ...payload.rows.sales,
+          ...payload.rows.purchase,
+          ...payload.rows.masters,
+          ...payload.rows.outstanding,
+        ];
 
-// 👇 Add this block
-combinedPayload.flatRows = [
-  ...combinedPayload.rows.sales,
-  ...combinedPayload.rows.purchase,
-  ...combinedPayload.rows.masters,
-  ...combinedPayload.rows.outstanding,
-];
-
-        await env.REPLICA_DATA.put("latest_tally_json", JSON.stringify(combinedPayload));
+        await env.REPLICA_DATA.put(
+          "latest_tally_json",
+          JSON.stringify(payload)
+        );
 
         return new Response(
           JSON.stringify({
             success: true,
-            message: "Unified Tally data stored successfully.",
-            counts: {
-              sales: salesRows.length,
-              purchase: purchaseRows.length,
-              masters: masterRows.length,
-              outstanding: outstandingRows.length,
-            },
+            message: "Data stored in correct format",
+            total:
+              parsed.sales.length +
+              parsed.purchase.length +
+              parsed.masters.length +
+              parsed.outstanding.length,
           }),
           { headers: { "Content-Type": "application/json", ...cors } }
         );
       } catch (err) {
         return new Response(
-          JSON.stringify({ error: err.message || "Processing failed" }),
+          JSON.stringify({ error: err.message }),
           { status: 500, headers: { "Content-Type": "application/json", ...cors } }
         );
       }
     }
 
-    // ------------------ LATEST FETCH ENDPOINT ------------------
+    // ------------ Fetch Latest Data ------------
     if (url.pathname === "/api/imports/latest" && request.method === "GET") {
       const data = await env.REPLICA_DATA.get("latest_tally_json");
       if (!data)
-        return new Response(JSON.stringify({ status: "empty", rows: {} }), {
-          headers: { "Content-Type": "application/json", ...cors },
-        });
-      return new Response(data, { headers: { "Content-Type": "application/json", ...cors } });
+        return new Response(
+          JSON.stringify({ status: "empty", rows: [] }),
+          { headers: { "Content-Type": "application/json", ...cors } }
+        );
+      return new Response(data, {
+        headers: { "Content-Type": "application/json", ...cors },
+      });
     }
 
-    // ------------------ DEFAULT 404 ------------------
     return new Response("404 Not Found", { status: 404, headers: cors });
   },
 };
