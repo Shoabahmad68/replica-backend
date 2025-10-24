@@ -1,4 +1,4 @@
-// index.js (Cloudflare Worker) - accepts XML or combined JSON from pusher
+// index.js (Cloudflare Worker) - Smart parser with debit-credit fix
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -23,22 +23,22 @@ export default {
         { headers: { "Content-Type": "application/json", ...cors } }
       );
 
-    // === POST from pusher.js ===
+    // Main API endpoint for pusher.js
     if (url.pathname === "/api/push/tally" && request.method === "POST") {
       try {
         const ct = request.headers.get("content-type") || "";
 
         // ------------------------
-        // ✅ 1. New JSON payload
+        // JSON payload from pusher.js
         // ------------------------
         if (ct.includes("application/json")) {
           const body = await request.json();
-
           const xml = body.salesXml || "";
           const rows = [];
 
           if (xml && xml.includes("<VOUCHER")) {
             const vouchers = xml.match(/<VOUCHER[\s\S]*?<\/VOUCHER>/gi) || [];
+
             for (const v of vouchers) {
               const get = (tag) => {
                 const m = v.match(
@@ -47,13 +47,21 @@ export default {
                 return m ? m[1].trim() : "";
               };
 
+              const voucherType = get("VOUCHERTYPENAME");
+              const isPositive = get("ISDEEMEDPOSITIVE"); // "Yes" means negative
+              let amount = parseFloat(get("AMOUNT") || "0");
+
+              // Fix debit-credit direction
+              if (isPositive === "Yes" && amount > 0) amount = -amount;
+
               rows.push({
                 type: "VOUCHER",
+                VoucherType: voucherType,
                 Date: get("DATE"),
                 Party: get("PARTYNAME"),
                 Item: get("STOCKITEMNAME"),
                 Qty: get("BILLEDQTY"),
-                Amount: get("AMOUNT"),
+                Amount: amount,
                 State: get("PLACEOFSUPPLY"),
                 Salesman: get("BASICSALESNAME"),
               });
@@ -72,14 +80,14 @@ export default {
             JSON.stringify({
               success: true,
               parsed: rows.length,
-              message: "Parsed XML from JSON body and stored",
+              message: "Parsed & normalized XML data successfully",
             }),
             { headers: { "Content-Type": "application/json", ...cors } }
           );
         }
 
         // ------------------------
-        // ✅ 2. Old XML POST
+        // Old XML upload fallback
         // ------------------------
         else {
           const xml = await request.text();
@@ -91,7 +99,6 @@ export default {
 
           const tags = ["VOUCHER", "COMPANY", "LEDGER", "STOCKITEM", "GROUP", "UNIT"];
           const records = [];
-
           const getVal = (block, tag) => {
             const match = block.match(
               new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, "i")
@@ -102,11 +109,15 @@ export default {
           for (const tag of tags) {
             const blocks = xml.match(new RegExp(`<${tag}[\\s\\S]*?<\\/${tag}>`, "gi")) || [];
             for (const block of blocks) {
+              const isPositive = getVal(block, "ISDEEMEDPOSITIVE");
+              let amt = parseFloat(getVal(block, "AMOUNT") || "0");
+              if (isPositive === "Yes" && amt > 0) amt = -amt;
+
               records.push({
                 type: tag,
                 Name: getVal(block, "NAME"),
                 Date: getVal(block, "DATE"),
-                Amount: getVal(block, "AMOUNT"),
+                Amount: amt,
                 Party: getVal(block, "PARTYNAME"),
                 Item: getVal(block, "STOCKITEMNAME"),
                 Qty: getVal(block, "BILLEDQTY"),
@@ -127,7 +138,7 @@ export default {
           return new Response(
             JSON.stringify({
               success: true,
-              message: "XML parsed and stored",
+              message: "XML parsed with debit-credit fix",
               count: records.length,
             }),
             { headers: { "Content-Type": "application/json", ...cors } }
@@ -143,7 +154,7 @@ export default {
       }
     }
 
-    // === GET for frontend ===
+    // GET latest parsed data
     if (url.pathname === "/api/imports/latest" && request.method === "GET") {
       const data = await env.REPLICA_DATA.get("latest_tally_json");
       if (!data)
