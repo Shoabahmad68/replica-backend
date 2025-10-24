@@ -162,16 +162,24 @@ export default {
           Contact: "Contact",
         };
 
-        const combinedPayload = {
-          status: "ok",
-          time: new Date().toISOString(),
-          rows: {
-            sales: [blank, salesHeader, ...salesRows],
-            purchase: [blank, purchaseHeader, ...purchaseRows],
-            masters: [blank, masterHeader, ...masterRows],
-            outstanding: [blank, outstandingHeader, ...outstandingRows],
-          },
-        };
+const combinedPayload = {
+  status: "ok",
+  time: new Date().toISOString(),
+  rows: {
+    sales: [blank, salesHeader, ...salesRows],
+    purchase: [blank, purchaseHeader, ...purchaseRows],
+    masters: [blank, masterHeader, ...masterRows],
+    outstanding: [blank, outstandingHeader, ...outstandingRows],
+  },
+};
+
+// 👇 Add this block
+combinedPayload.flatRows = [
+  ...combinedPayload.rows.sales,
+  ...combinedPayload.rows.purchase,
+  ...combinedPayload.rows.masters,
+  ...combinedPayload.rows.outstanding,
+];
 
         await env.REPLICA_DATA.put("latest_tally_json", JSON.stringify(combinedPayload));
 
