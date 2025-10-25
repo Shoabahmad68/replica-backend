@@ -1,6 +1,4 @@
-// replica-backend/index.js — decompress + parse XML to table
-import { gunzipSync } from "zlib";
-
+// replica-backend/index.js — Cloudflare Workers compatible decompression + XML parse
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -10,13 +8,14 @@ export default {
       "Access-Control-Allow-Headers": "Content-Type, Authorization",
     };
 
-    if (request.method === "OPTIONS") return new Response(null, { headers: cors });
+    if (request.method === "OPTIONS")
+      return new Response(null, { headers: cors });
 
-    // ✅ Home
+    // ✅ test
     if (url.pathname === "/")
-      return new Response("Replica Backend Active ✅", { headers: cors });
+      return new Response("Replica Cloudflare Backend Active ✅", { headers: cors });
 
-    // ✅ Receive data from pusher
+    // ✅ save incoming raw data
     if (url.pathname === "/api/push/tally" && request.method === "POST") {
       const body = await request.text();
       await env.REPLICA_DATA.put("latest_tally_raw", body);
@@ -25,14 +24,13 @@ export default {
       });
     }
 
-    // ✅ Provide structured data to frontend
+    // ✅ fetch and decompress + parse
     if (url.pathname === "/api/imports/latest" && request.method === "GET") {
       const raw = await env.REPLICA_DATA.get("latest_tally_raw");
       if (!raw)
-        return new Response(
-          JSON.stringify({ status: "empty", rows: [], flatRows: [] }),
-          { headers: { "Content-Type": "application/json", ...cors } }
-        );
+        return new Response(JSON.stringify({ status: "empty", rows: [], flatRows: [] }), {
+          headers: { "Content-Type": "application/json", ...cors },
+        });
 
       let data;
       try {
@@ -41,30 +39,34 @@ export default {
         data = { raw };
       }
 
-      // Decode + decompress XML
-      const decodeGzip = (base64str) => {
+      // Cloudflare Workers में gzip decompress करने का helper
+      async function decompressBase64(base64str) {
         try {
-          const buf = Buffer.from(base64str, "base64");
-          return gunzipSync(buf).toString("utf8");
-        } catch {
+          const bin = Uint8Array.from(atob(base64str), (c) => c.charCodeAt(0));
+          const ds = new DecompressionStream("gzip");
+          const decompressed = await new Response(
+            new Blob([bin]).stream().pipeThrough(ds)
+          ).arrayBuffer();
+          return new TextDecoder().decode(decompressed);
+        } catch (e) {
           return "";
         }
-      };
+      }
 
-      const salesXml = decodeGzip(data.salesXml || "");
-      const purchaseXml = decodeGzip(data.purchaseXml || "");
-      const mastersXml = decodeGzip(data.mastersXml || "");
+      const salesXml = await decompressBase64(data.salesXml || "");
+      const purchaseXml = await decompressBase64(data.purchaseXml || "");
+      const mastersXml = await decompressBase64(data.mastersXml || "");
 
-      // XML to table rows
-      const extractTag = (xml, tag) => {
-        const regex = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "gi");
-        const matches = [];
+      // XML to JSON rows
+      function extractTag(xml, tag) {
+        const re = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "gi");
+        const out = [];
         let m;
-        while ((m = regex.exec(xml))) matches.push(m[1].trim());
-        return matches;
-      };
+        while ((m = re.exec(xml))) out.push(m[1].trim());
+        return out;
+      }
 
-      const parseXML = (xml) => {
+      function parseXML(xml) {
         if (!xml.includes("<VOUCHER")) return [];
         const vouchers = xml.match(/<VOUCHER[\s\S]*?<\/VOUCHER>/gi) || [];
         const rows = [];
@@ -72,14 +74,14 @@ export default {
           const row = {
             Date: extractTag(v, "DATE")[0] || "",
             Party: extractTag(v, "PARTYNAME")[0] || "",
-            Amount: extractTag(v, "AMOUNT")[0] || "",
             Item: extractTag(v, "STOCKITEMNAME")[0] || "",
+            Amount: extractTag(v, "AMOUNT")[0] || "",
             VoucherType: extractTag(v, "VOUCHERTYPENAME")[0] || "",
           };
           if (Object.values(row).some((x) => x)) rows.push(row);
         }
         return rows;
-      };
+      }
 
       const rows = {
         sales: parseXML(salesXml),
@@ -101,6 +103,7 @@ export default {
       };
 
       await env.REPLICA_DATA.put("latest_tally_json", JSON.stringify(payload));
+
       return new Response(JSON.stringify(payload), {
         headers: { "Content-Type": "application/json", ...cors },
       });
