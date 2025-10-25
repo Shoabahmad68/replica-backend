@@ -1,4 +1,4 @@
-// ✅ Final Stable Version — auto string fix + flatRows + full compatibility
+// ✅ Final Stable + Fixed XML Parser Version
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -21,7 +21,7 @@ export default {
       );
 
     // -----------------------------------------------------
-    // PUSH endpoint
+    // PUSH endpoint (Tally → Worker)
     // -----------------------------------------------------
     if (url.pathname === "/api/push/tally" && request.method === "POST") {
       try {
@@ -40,31 +40,44 @@ export default {
           outstandingXml: body.outstandingXml || "",
         };
 
+        // ✅ Improved XML parser: supports nested tags and multiple entries
         const parseXML = (xml) => {
           if (!xml || !xml.includes("<ENVELOPE>")) return [];
-          const get = (src, tag) => {
-            const m = src.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, "i"));
-            return m ? m[1].trim() : "";
+
+          const vouchers = xml.match(/<VOUCHER[\s\S]*?<\/VOUCHER>/gi) || [];
+          const getAll = (src, tag) => {
+            const matches = [...src.matchAll(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, "gi"))];
+            return matches.map((m) => m[1].trim());
           };
-          const blocks = xml.match(/<VOUCHER[\s\S]*?<\/VOUCHER>/gi) || [];
+
           const rows = [];
-          for (const b of blocks) {
-            let amt = parseFloat(get(b, "AMOUNT") || "0");
-            if (get(b, "ISDEEMEDPOSITIVE") === "Yes" && amt > 0) amt = -amt;
+          for (const v of vouchers) {
+            const amtArr = getAll(v, "AMOUNT");
+            let amt = amtArr.length ? parseFloat(amtArr.pop() || "0") : 0;
+            const isNeg = v.includes("<ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>");
+            if (isNeg && amt > 0) amt = -amt;
+
             rows.push({
-              "Voucher Type": get(b, "VOUCHERTYPENAME"),
-              Date: get(b, "DATE"),
-              Party: get(b, "PARTYNAME"),
-              Item: get(b, "STOCKITEMNAME"),
-              Qty: get(b, "BILLEDQTY"),
+              "Voucher Type": getAll(v, "VOUCHERTYPENAME")[0] || "",
+              Date: getAll(v, "DATE")[0] || "",
+              Party: getAll(v, "PARTYNAME")[0] || "",
+              Item: getAll(v, "STOCKITEMNAME")[0] || "",
+              Qty: getAll(v, "BILLEDQTY")[0] || "",
               Amount: amt,
-              State: get(b, "PLACEOFSUPPLY"),
-              Salesman: get(b, "BASICSALESNAME"),
+              State: getAll(v, "PLACEOFSUPPLY")[0] || "",
+              Salesman: getAll(v, "BASICSALESNAME")[0] || "",
             });
           }
-          return rows;
+
+          // filter out empty rows
+          return rows.filter(
+            (r) =>
+              Object.values(r).some((v) => String(v || "").trim() !== "") &&
+              !(Object.values(r).length === 1 && Object.values(r)[0] === "Voucher Type")
+          );
         };
 
+        // ✅ Parse all sections
         const parsed = {
           sales: parseXML(xmlBlocks.salesXml),
           purchase: parseXML(xmlBlocks.purchaseXml),
@@ -72,37 +85,20 @@ export default {
           outstanding: parseXML(xmlBlocks.outstandingXml),
         };
 
-        const blank = {};
-        const header = {
-          "Voucher Type": "Voucher Type",
-          Date: "Date",
-          Party: "Party",
-          Item: "Item",
-          Qty: "Qty",
-          Amount: "Amount",
-          State: "State",
-          Salesman: "Salesman",
-        };
-
+        // ✅ Payload to store
         const payload = {
           status: "ok",
           time: new Date().toISOString(),
-          rows: {
-            sales: [blank, header, ...parsed.sales],
-            purchase: [blank, header, ...parsed.purchase],
-            masters: [blank, header, ...parsed.masters],
-            outstanding: [blank, header, ...parsed.outstanding],
-          },
+          rows: parsed,
+          flatRows: [
+            ...(parsed.sales || []),
+            ...(parsed.purchase || []),
+            ...(parsed.masters || []),
+            ...(parsed.outstanding || []),
+          ],
         };
 
-        // add flatRows for frontend (unified)
-        payload.flatRows = [
-          ...payload.rows.sales,
-          ...payload.rows.purchase,
-          ...payload.rows.masters,
-          ...payload.rows.outstanding,
-        ];
-
+        // ✅ Save to Cloudflare KV
         await env.REPLICA_DATA.put("latest_tally_json", JSON.stringify(payload));
 
         return new Response(
@@ -110,10 +106,10 @@ export default {
             success: true,
             message: "Tally data saved successfully",
             total:
-              parsed.sales.length +
-              parsed.purchase.length +
-              parsed.masters.length +
-              parsed.outstanding.length,
+              (parsed.sales?.length || 0) +
+              (parsed.purchase?.length || 0) +
+              (parsed.masters?.length || 0) +
+              (parsed.outstanding?.length || 0),
           }),
           { headers: { "Content-Type": "application/json", ...cors } }
         );
@@ -126,7 +122,7 @@ export default {
     }
 
     // -----------------------------------------------------
-    // IMPORT endpoint
+    // IMPORT endpoint (Frontend → Worker)
     // -----------------------------------------------------
     if (url.pathname === "/api/imports/latest" && request.method === "GET") {
       const raw = await env.REPLICA_DATA.get("latest_tally_json");
@@ -139,10 +135,8 @@ export default {
       let data = {};
       try {
         data = JSON.parse(raw);
-        // if rows accidentally stored as string, auto-fix it
-        if (typeof data.rows === "string") {
-          data.rows = JSON.parse(data.rows);
-        }
+        if (typeof data.rows === "string") data.rows = JSON.parse(data.rows);
+
         if (!data.flatRows && data.rows) {
           data.flatRows = [
             ...(data.rows.sales || []),
@@ -151,7 +145,7 @@ export default {
             ...(data.rows.outstanding || []),
           ];
         }
-      } catch {
+      } catch (e) {
         data = { status: "corrupt", rows: [] };
       }
 
