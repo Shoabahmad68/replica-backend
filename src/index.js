@@ -1,4 +1,4 @@
-// ✅ Final Stable + Fixed XML Parser Version
+// ✅ Final Stable + Error-Free XML Parser Version
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -40,44 +40,45 @@ export default {
           outstandingXml: body.outstandingXml || "",
         };
 
-        // ✅ Improved XML parser: supports nested tags and multiple entries
+        // ✅ Improved XML parser: stable and nested safe
         const parseXML = (xml) => {
           if (!xml || !xml.includes("<ENVELOPE>")) return [];
 
           const vouchers = xml.match(/<VOUCHER[\s\S]*?<\/VOUCHER>/gi) || [];
-          const getAll = (src, tag) => {
-            const matches = [...src.matchAll(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, "gi"))];
-            return matches.map((m) => m[1].trim());
+          const getField = (src, tag) => {
+            const match = src.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, "i"));
+            return match ? match[1].trim() : "";
+          };
+
+          const getAny = (src, tags) => {
+            for (const tag of tags) {
+              const val = getField(src, tag);
+              if (val) return val;
+            }
+            return "";
           };
 
           const rows = [];
           for (const v of vouchers) {
-            const amtArr = getAll(v, "AMOUNT");
-            let amt = amtArr.length ? parseFloat(amtArr.pop() || "0") : 0;
-            const isNeg = v.includes("<ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>");
-            if (isNeg && amt > 0) amt = -amt;
+            let amt = parseFloat(getAny(v, ["AMOUNT", "BILLEDAMOUNT"]) || "0");
+            if (v.includes("<ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>") && amt > 0) amt = -amt;
 
             rows.push({
-              "Voucher Type": getAll(v, "VOUCHERTYPENAME")[0] || "",
-              Date: getAll(v, "DATE")[0] || "",
-              Party: getAll(v, "PARTYNAME")[0] || "",
-              Item: getAll(v, "STOCKITEMNAME")[0] || "",
-              Qty: getAll(v, "BILLEDQTY")[0] || "",
+              "Voucher Type": getAny(v, ["VOUCHERTYPENAME", "VCHTYPE"]),
+              Date: getAny(v, ["DATE"]),
+              Party: getAny(v, ["PARTYNAME", "LEDGERNAME"]),
+              Item: getAny(v, ["STOCKITEMNAME", "ITEMNAME"]),
+              Qty: getAny(v, ["BILLEDQTY", "ACTUALQTY"]),
               Amount: amt,
-              State: getAll(v, "PLACEOFSUPPLY")[0] || "",
-              Salesman: getAll(v, "BASICSALESNAME")[0] || "",
+              State: getAny(v, ["PLACEOFSUPPLY", "STATENAME"]),
+              Salesman: getAny(v, ["BASICSALESNAME", "SALESMANNAME"]),
             });
           }
 
-          // filter out empty rows
-          return rows.filter(
-            (r) =>
-              Object.values(r).some((v) => String(v || "").trim() !== "") &&
-              !(Object.values(r).length === 1 && Object.values(r)[0] === "Voucher Type")
-          );
+          return rows.filter((r) => Object.values(r).some((x) => x && x !== "0"));
         };
 
-        // ✅ Parse all sections
+        // ✅ Parse all categories
         const parsed = {
           sales: parseXML(xmlBlocks.salesXml),
           purchase: parseXML(xmlBlocks.purchaseXml),
@@ -85,7 +86,7 @@ export default {
           outstanding: parseXML(xmlBlocks.outstandingXml),
         };
 
-        // ✅ Payload to store
+        // ✅ Payload for KV
         const payload = {
           status: "ok",
           time: new Date().toISOString(),
@@ -98,7 +99,6 @@ export default {
           ],
         };
 
-        // ✅ Save to Cloudflare KV
         await env.REPLICA_DATA.put("latest_tally_json", JSON.stringify(payload));
 
         return new Response(
@@ -125,16 +125,15 @@ export default {
     // IMPORT endpoint (Frontend → Worker)
     // -----------------------------------------------------
     if (url.pathname === "/api/imports/latest" && request.method === "GET") {
-      const raw = await env.REPLICA_DATA.get("latest_tally_json");
-      if (!raw)
-        return new Response(
-          JSON.stringify({ status: "empty", rows: [] }),
-          { headers: { "Content-Type": "application/json", ...cors } }
-        );
-
-      let data = {};
       try {
-        data = JSON.parse(raw);
+        const raw = await env.REPLICA_DATA.get("latest_tally_json");
+        if (!raw)
+          return new Response(
+            JSON.stringify({ status: "empty", rows: [] }),
+            { headers: { "Content-Type": "application/json", ...cors } }
+          );
+
+        let data = JSON.parse(raw);
         if (typeof data.rows === "string") data.rows = JSON.parse(data.rows);
 
         if (!data.flatRows && data.rows) {
@@ -145,15 +144,21 @@ export default {
             ...(data.rows.outstanding || []),
           ];
         }
-      } catch (e) {
-        data = { status: "corrupt", rows: [] };
-      }
 
-      return new Response(JSON.stringify(data), {
-        headers: { "Content-Type": "application/json", ...cors },
-      });
+        return new Response(JSON.stringify(data), {
+          headers: { "Content-Type": "application/json", ...cors },
+        });
+      } catch (e) {
+        return new Response(
+          JSON.stringify({ status: "corrupt", rows: [] }),
+          { headers: { "Content-Type": "application/json", ...cors } }
+        );
+      }
     }
 
+    // -----------------------------------------------------
+    // Default 404
+    // -----------------------------------------------------
     return new Response("404 Not Found", { status: 404, headers: cors });
   },
 };
