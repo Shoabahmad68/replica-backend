@@ -1,4 +1,4 @@
-// replica-backend/index.js — Complete fixed worker
+// replica-backend/index.js — final universal gzip-safe version
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -9,36 +9,30 @@ export default {
     };
 
     if (request.method === "OPTIONS") return new Response(null, { headers: cors });
-
     if (url.pathname === "/") return new Response("Replica Backend Active ✅", { headers: cors });
 
-    if (url.pathname === "/api/test")
-      return new Response(JSON.stringify({ status: "ok", time: new Date().toISOString() }), {
-        headers: { "Content-Type": "application/json", ...cors },
-      });
-
-    // util: attempt to decompress base64-gzip, fallback to raw
-    async function tryDecompressMaybe(b64OrXml) {
-      if (!b64OrXml) return "";
-      // If already looks like XML, return as-is
-      if (typeof b64OrXml === "string" && b64OrXml.includes("<ENVELOPE")) return b64OrXml;
+    // =============== GZIP DECOMPRESS HELPER =================
+    async function decompressBase64Gzip(b64) {
+      if (!b64 || typeof b64 !== "string") return "";
+      if (b64.includes("<ENVELOPE")) return b64; // already XML
       try {
-        // convert base64 -> Uint8Array
-        const binary = Uint8Array.from(atob(String(b64OrXml)), (c) => c.charCodeAt(0));
-        // Make a stream, pipe through DecompressionStream (gzip)
-        const blob = new Blob([binary]);
-        const ds = blob.stream().pipeThrough(new DecompressionStream("gzip"));
-        const text = await new Response(ds).text();
-        if (text && text.includes("<ENVELOPE")) return text;
-        // if decompressed text doesn't look like XML, fallback to raw input interpreted as text
-      } catch (e) {
-        // ignore and try fallback
+        const bin = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+        const ds = new DecompressionStream("gzip");
+        const decompressed = await new Response(new Blob([bin]).stream().pipeThrough(ds)).text();
+        return decompressed;
+      } catch {
+        try {
+          // fallback for older runtimes
+          const binary = atob(b64);
+          const text = new TextDecoder().decode(Uint8Array.from(binary, c => c.charCodeAt(0)));
+          return text.includes("<ENVELOPE") ? text : "";
+        } catch {
+          return "";
+        }
       }
-      // fallback: maybe input was not base64 but url-encoded or raw; return original string
-      return String(b64OrXml || "");
     }
 
-    // safe field extractors (from your original)
+    // =============== LIGHTWEIGHT XML PARSER =================
     const getField = (src, tag) => {
       if (!src) return "";
       const re = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i");
@@ -53,85 +47,53 @@ export default {
       return "";
     };
     const parseNumber = (s) => {
-      if (s == null) return 0;
-      try {
-        const cleaned = String(s).replace(/,/g, "").replace(/[^\d\.\-]/g, "");
-        const n = parseFloat(cleaned);
-        return Number.isNaN(n) ? 0 : n;
-      } catch {
-        return 0;
-      }
+      if (!s) return 0;
+      const cleaned = String(s).replace(/,/g, "").replace(/[^\d.\-]/g, "");
+      const n = parseFloat(cleaned);
+      return isNaN(n) ? 0 : n;
     };
-
-    // robust voucher parser
     const parseXML = (xml) => {
-      if (!xml || typeof xml !== "string" || !xml.includes("<ENVELOPE")) return [];
+      if (!xml || !xml.includes("<VOUCHER")) return [];
       const vouchers = xml.match(/<VOUCHER[\s\S]*?<\/VOUCHER>/gi) || [];
       const rows = [];
       for (const v of vouchers) {
-        const amtRaw = getAny(v, ["AMOUNT", "BILLEDAMOUNT", "AMT"]);
-        let amt = parseNumber(amtRaw || "0");
+        const amtRaw = getAny(v, ["AMOUNT", "BILLEDAMOUNT"]);
+        let amt = parseNumber(amtRaw);
         const deem = (getField(v, "ISDEEMEDPOSITIVE") || "").toLowerCase();
         if (deem === "yes" && amt > 0) amt = -amt;
 
-        const row = {
-          "Voucher Type": getAny(v, ["VOUCHERTYPENAME", "VCHTYPE", "VOUCHERNAME"]),
+        const r = {
+          "Voucher Type": getAny(v, ["VOUCHERTYPENAME", "VCHTYPE"]),
           Date: getAny(v, ["DATE", "VCHDATE"]),
           Party: getAny(v, ["PARTYNAME", "LEDGERNAME"]),
           Item: getAny(v, ["STOCKITEMNAME", "ITEMNAME"]),
-          Qty: getAny(v, ["BILLEDQTY", "ACTUALQTY", "QTY"]),
+          Qty: getAny(v, ["BILLEDQTY", "ACTUALQTY"]),
           Amount: amt,
           State: getAny(v, ["PLACEOFSUPPLY", "STATENAME"]),
           Salesman: getAny(v, ["BASICSALESNAME", "SALESMANNAME"]),
         };
-
-        const hasMeaning = Object.values(row).some((val) => {
-          if (val === null || val === undefined) return false;
-          if (typeof val === "number") return val !== 0;
-          const s = String(val).trim();
-          if (!s) return false;
-          if (/voucher ?type/i.test(s) && s.length < 30) return false;
-          if (/date/i.test(s) && s.length < 6) return false;
-          return true;
-        });
-
-        if (hasMeaning) rows.push(row);
+        const keep = Object.values(r).some(v => String(v || "").trim() !== "" && v !== 0);
+        if (keep) rows.push(r);
       }
       return rows;
     };
 
-    // ----- PUSH endpoint -----
+    // =============== PUSH ENDPOINT =================
     if (url.pathname === "/api/push/tally" && request.method === "POST") {
       try {
-        const ct = request.headers.get("content-type") || "";
-        if (!ct.includes("application/json"))
-          return new Response(JSON.stringify({ error: "Invalid content type" }), {
-            status: 400,
-            headers: { "Content-Type": "application/json", ...cors },
-          });
-
         const body = await request.json();
 
-        // support both compressed base64 fields and raw xml fields
-        const rawSales = body.salesXml || body.sales || "";
-        const rawPurchase = body.purchaseXml || body.purchase || "";
-        const rawMasters = body.mastersXml || body.masters || "";
-        const rawOutstanding = body.outstandingXml || body.outstanding || "";
-
-        // decompress/normalize
-        const [salesXml, purchaseXml, mastersXml, outstandingXml] = await Promise.all([
-          tryDecompressMaybe(rawSales),
-          tryDecompressMaybe(rawPurchase),
-          tryDecompressMaybe(rawMasters),
-          tryDecompressMaybe(rawOutstanding),
+        // decompress every field safely
+        const [salesXml, purchaseXml, mastersXml] = await Promise.all([
+          decompressBase64Gzip(body.salesXml || ""),
+          decompressBase64Gzip(body.purchaseXml || ""),
+          decompressBase64Gzip(body.mastersXml || ""),
         ]);
 
-        // parse
         const parsed = {
           sales: parseXML(salesXml),
           purchase: parseXML(purchaseXml),
           masters: parseXML(mastersXml),
-          outstanding: parseXML(outstandingXml),
         };
 
         const header = {
@@ -144,90 +106,43 @@ export default {
           State: "State",
           Salesman: "Salesman",
         };
-        const mkCategory = (arr) => (arr && arr.length ? [header, ...arr] : []);
 
-        const rowsForKV = {
+        const mkCategory = (arr) => (arr.length ? [header, ...arr] : []);
+        const rows = {
           sales: mkCategory(parsed.sales),
           purchase: mkCategory(parsed.purchase),
           masters: mkCategory(parsed.masters),
-          outstanding: mkCategory(parsed.outstanding),
         };
+
+        const flatRows = [...rows.sales, ...rows.purchase, ...rows.masters];
 
         const payload = {
           status: "ok",
           time: new Date().toISOString(),
-          rows: rowsForKV,
-          flatRows: [
-            ...(rowsForKV.sales || []),
-            ...(rowsForKV.purchase || []),
-            ...(rowsForKV.masters || []),
-            ...(rowsForKV.outstanding || []),
-          ],
-          meta: {
-            source: "tally-pusher",
-            originalSizes: {
-              salesRaw: (rawSales || "").length,
-              purchaseRaw: (rawPurchase || "").length,
-              mastersRaw: (rawMasters || "").length,
-            },
-          },
+          rows,
+          flatRows,
         };
 
-        // save to KV (string)
         await env.REPLICA_DATA.put("latest_tally_json", JSON.stringify(payload));
-
-        return new Response(
-          JSON.stringify({
-            success: true,
-            message: "Tally data saved successfully",
-            total:
-              (parsed.sales?.length || 0) +
-              (parsed.purchase?.length || 0) +
-              (parsed.masters?.length || 0) +
-              (parsed.outstanding?.length || 0),
-          }),
-          { headers: { "Content-Type": "application/json", ...cors } }
-        );
+        return new Response(JSON.stringify({ success: true, total: flatRows.length }), {
+          headers: { "Content-Type": "application/json", ...cors },
+        });
       } catch (err) {
-        return new Response(JSON.stringify({ error: err?.message || String(err) }), {
+        return new Response(JSON.stringify({ error: err.message }), {
           status: 500,
           headers: { "Content-Type": "application/json", ...cors },
         });
       }
     }
 
-    // ----- IMPORT endpoint -----
-    if (url.pathname === "/api/imports/latest" && request.method === "GET") {
-      try {
-        const raw = await env.REPLICA_DATA.get("latest_tally_json");
-        if (!raw)
-          return new Response(JSON.stringify({ status: "empty", rows: [], flatRows: [] }), {
-            headers: { "Content-Type": "application/json", ...cors },
-          });
-
-        let data = JSON.parse(raw);
-        if (typeof data.rows === "string") {
-          try {
-            data.rows = JSON.parse(data.rows);
-          } catch {
-            /* ignore */
-          }
-        }
-        if (!data.flatRows && data.rows) {
-          data.flatRows = [
-            ...(data.rows.sales || []),
-            ...(data.rows.purchase || []),
-            ...(data.rows.masters || []),
-            ...(data.rows.outstanding || []),
-          ];
-        }
-
-        return new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json", ...cors } });
-      } catch (e) {
-        return new Response(JSON.stringify({ status: "corrupt", rows: [], flatRows: [] }), {
+    // =============== IMPORT ENDPOINT =================
+    if (url.pathname === "/api/imports/latest") {
+      const raw = await env.REPLICA_DATA.get("latest_tally_json");
+      if (!raw)
+        return new Response(JSON.stringify({ status: "empty", rows: {}, flatRows: [] }), {
           headers: { "Content-Type": "application/json", ...cors },
         });
-      }
+      return new Response(raw, { headers: { "Content-Type": "application/json", ...cors } });
     }
 
     return new Response("404 Not Found", { status: 404, headers: cors });
