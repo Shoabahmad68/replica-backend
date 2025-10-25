@@ -1,58 +1,56 @@
 export default {
   async fetch(request, env) {
-    const corsHeaders = {
+    const cors = {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization",
+      "Access-Control-Allow-Headers": "Content-Type",
     };
 
     if (request.method === "OPTIONS") {
-      return new Response(null, { headers: corsHeaders });
+      return new Response(null, { headers: cors });
     }
 
+    const url = new URL(request.url);
+    const path = url.pathname;
+
     try {
-      const url = new URL(request.url);
-      const path = url.pathname;
-
       // ✅ Health check
-      if (path === "/")
-        return new Response("Replica Backend Active ✅", { headers: corsHeaders });
+      if (path === "/") {
+        return new Response("Replica Backend Active ✅", { headers: cors });
+      }
 
-      // ✅ Push data from Tally pusher
+      // ✅ Push from Tally pusher
       if (path === "/api/push/tally" && request.method === "POST") {
         const body = await request.text();
         await env.REPLICA_DATA.put("latest_tally_raw", body);
         return new Response(
           JSON.stringify({ status: "ok", saved: body.length }),
-          { headers: { "Content-Type": "application/json", ...corsHeaders } }
+          { headers: { "Content-Type": "application/json", ...cors } }
         );
       }
 
-      // ✅ Fetch latest imports
+      // ✅ Read + parse + send
       if (path === "/api/imports/latest") {
         const raw = await env.REPLICA_DATA.get("latest_tally_raw");
         if (!raw) {
-          return new Response(
-            JSON.stringify({ status: "empty", rows: [] }),
-            { headers: { "Content-Type": "application/json", ...corsHeaders } }
-          );
+          return new Response(JSON.stringify({ status: "empty", rows: [] }), {
+            headers: { "Content-Type": "application/json", ...cors },
+          });
         }
 
-        let parsed = {};
+        let parsed;
         try {
           parsed = JSON.parse(raw);
         } catch {
-          return new Response(
-            JSON.stringify({ status: "corrupt", rows: [] }),
-            { headers: { "Content-Type": "application/json", ...corsHeaders } }
-          );
+          parsed = { rawText: raw };
         }
 
+        // ✅ Decompress helper
         async function decompressBase64(b64) {
           try {
-            const binary = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+            const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
             const ds = new DecompressionStream("gzip");
-            const ab = await new Response(new Blob([binary]).stream().pipeThrough(ds)).arrayBuffer();
+            const ab = await new Response(new Blob([bin]).stream().pipeThrough(ds)).arrayBuffer();
             return new TextDecoder().decode(ab);
           } catch {
             return "";
@@ -67,16 +65,16 @@ export default {
           if (!xml.includes("<VOUCHER")) return [];
           const vouchers = xml.match(/<VOUCHER[\s\S]*?<\/VOUCHER>/gi) || [];
           return vouchers.map((v) => {
-            const extract = (t) => {
+            const pick = (t) => {
               const m = v.match(new RegExp(`<${t}[^>]*>([\\s\\S]*?)<\\/${t}>`, "i"));
               return m ? m[1].trim() : "";
             };
             return {
-              VoucherType: extract("VOUCHERTYPENAME"),
-              Date: extract("DATE"),
-              Party: extract("PARTYNAME"),
-              Item: extract("STOCKITEMNAME"),
-              Amount: extract("AMOUNT"),
+              VoucherType: pick("VOUCHERTYPENAME"),
+              Date: pick("DATE"),
+              Party: pick("PARTYNAME"),
+              Item: pick("STOCKITEMNAME"),
+              Amount: pick("AMOUNT"),
             };
           });
         }
@@ -88,17 +86,16 @@ export default {
         ];
 
         return new Response(
-          JSON.stringify({ status: "ok", count: rows.length, rows }),
-          { headers: { "Content-Type": "application/json", ...corsHeaders } }
+          JSON.stringify({ status: "ok", rows }),
+          { headers: { "Content-Type": "application/json", ...cors } }
         );
       }
 
-      // 404 fallback
-      return new Response("Not Found", { status: 404, headers: corsHeaders });
+      return new Response("Not Found", { status: 404, headers: cors });
     } catch (e) {
       return new Response(
         JSON.stringify({ status: "error", message: e.message }),
-        { status: 500, headers: { "Content-Type": "application/json", ...corsHeaders } }
+        { status: 500, headers: { "Content-Type": "application/json", ...cors } }
       );
     }
   },
