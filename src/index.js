@@ -1,4 +1,4 @@
-// index.js — Full unified backend for Replica System
+// ✅ index.js — FULL FIXED BACKEND (for latest_tally_json only)
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -9,148 +9,49 @@ export default {
     };
 
     if (request.method === "OPTIONS") return new Response(null, { headers: cors });
+
+    // Root test
     if (url.pathname === "/")
       return new Response("Replica Unified Backend Active ✅", { headers: cors });
 
-    // ------------------ TEST ROUTE ------------------
+    // -------------------- TEST ROUTE --------------------
     if (url.pathname === "/api/test") {
       return new Response(
-        JSON.stringify({ status: "ok", message: "Backend Live", time: new Date().toISOString() }),
+        JSON.stringify({
+          status: "ok",
+          message: "Backend Live",
+          time: new Date().toISOString(),
+        }),
         { headers: { "Content-Type": "application/json", ...cors } }
       );
     }
 
-    // ------------------ MAIN PUSH ENDPOINT ------------------
+    // -------------------- MAIN PUSH ENDPOINT --------------------
     if (url.pathname === "/api/push/tally" && request.method === "POST") {
       try {
         const ct = request.headers.get("content-type") || "";
         if (!ct.includes("application/json"))
           return new Response("Invalid Content-Type", { status: 400, headers: cors });
 
-        const body = await request.json();
-        const xmlSales = body.salesXml || "";
-        const xmlPurchase = body.purchaseXml || "";
-        const xmlMasters = body.mastersXml || "";
-        const xmlOutstanding = body.outstandingXml || "";
+        const data = await request.json();
+        const jsonStr = JSON.stringify(data);
+        const sizeMB = (Buffer.byteLength(jsonStr) / 1024 / 1024).toFixed(2);
 
-        const extractBlocks = (xml, tag) => xml.match(new RegExp(`<${tag}[\\s\\S]*?<\\/${tag}>`, "gi")) || [];
-        const getTag = (block, tag) => {
-          const match = block.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, "i"));
-          return match ? match[1].trim() : "";
-        };
+        if (sizeMB < 0.05)
+          return new Response("Empty or invalid data", { status: 400, headers: cors });
 
-        const salesRows = [];
-        if (xmlSales.includes("<VOUCHER")) {
-          const vouchers = extractBlocks(xmlSales, "VOUCHER");
-          for (const v of vouchers) {
-            const amt = parseFloat(getTag(v, "AMOUNT") || "0");
-            const isPositive = getTag(v, "ISDEEMEDPOSITIVE");
-            const finalAmt = isPositive === "Yes" && amt > 0 ? -amt : amt;
-            salesRows.push({
-              "Voucher Type": getTag(v, "VOUCHERTYPENAME"),
-              Date: getTag(v, "DATE"),
-              Party: getTag(v, "PARTYNAME"),
-              Item: getTag(v, "STOCKITEMNAME"),
-              Qty: getTag(v, "BILLEDQTY"),
-              Amount: finalAmt,
-              State: getTag(v, "PLACEOFSUPPLY"),
-              Salesman: getTag(v, "BASICSALESNAME"),
-            });
-          }
-        }
-
-        const purchaseRows = [];
-        if (xmlPurchase.includes("<VOUCHER")) {
-          const vouchers = extractBlocks(xmlPurchase, "VOUCHER");
-          for (const v of vouchers) {
-            purchaseRows.push({
-              "Voucher Type": getTag(v, "VOUCHERTYPENAME"),
-              Date: getTag(v, "DATE"),
-              Party: getTag(v, "PARTYNAME"),
-              Item: getTag(v, "STOCKITEMNAME"),
-              Qty: getTag(v, "BILLEDQTY"),
-              Amount: parseFloat(getTag(v, "AMOUNT") || "0"),
-              State: getTag(v, "PLACEOFSUPPLY"),
-              Salesman: getTag(v, "BASICSALESNAME"),
-            });
-          }
-        }
-
-        const masterRows = [];
-        if (xmlMasters.includes("<LEDGER")) {
-          const ledgers = extractBlocks(xmlMasters, "LEDGER");
-          for (const l of ledgers) {
-            masterRows.push({
-              Type: "Ledger",
-              Name: getTag(l, "NAME"),
-              Opening: getTag(l, "OPENINGBALANCE"),
-              Closing: getTag(l, "CLOSINGBALANCE"),
-              Email: getTag(l, "EMAIL"),
-            });
-          }
-        }
-        if (xmlMasters.includes("<STOCKITEM")) {
-          const stocks = extractBlocks(xmlMasters, "STOCKITEM");
-          for (const s of stocks) {
-            masterRows.push({
-              Type: "StockItem",
-              Name: getTag(s, "NAME"),
-              Opening: getTag(s, "OPENINGBALANCE"),
-              Closing: getTag(s, "CLOSINGBALANCE"),
-            });
-          }
-        }
-
-        const outstandingRows = [];
-        if (xmlOutstanding.includes("<LEDGER")) {
-          const ledgers = extractBlocks(xmlOutstanding, "LEDGER");
-          for (const l of ledgers) {
-            outstandingRows.push({
-              Party: getTag(l, "NAME"),
-              Closing: getTag(l, "CLOSINGBALANCE"),
-              Contact: getTag(l, "EMAIL"),
-            });
-          }
-        }
-
-        const totalRecords =
-          salesRows.length + purchaseRows.length + masterRows.length + outstandingRows.length;
-        if (totalRecords === 0) {
-          const oldData = await env.REPLICA_DATA.get("latest_tally_json");
-          return new Response(
-            JSON.stringify({
-              success: false,
-              message: "Empty data skipped. Old data retained.",
-              oldData: !!oldData,
-              time: new Date().toISOString(),
-            }),
-            { headers: { "Content-Type": "application/json", ...cors } }
-          );
-        }
-
-        const combinedPayload = {
-          status: "ok",
-          time: new Date().toISOString(),
-          rows: {
-            sales: salesRows,
-            purchase: purchaseRows,
-            masters: masterRows,
-            outstanding: outstandingRows,
-          },
-        };
-
-        await env.REPLICA_DATA.put("latest_tally_json", JSON.stringify(combinedPayload));
+        // 🔹 Store ONLY one unified key in KV
+        await env.REPLICA_DATA.put("latest_tally_json", jsonStr, {
+          expirationTtl: 60 * 60 * 24 * 7, // keep 7 days
+        });
 
         return new Response(
           JSON.stringify({
             success: true,
-            message: "Unified Tally data stored successfully.",
-            counts: {
-              sales: salesRows.length,
-              purchase: purchaseRows.length,
-              masters: masterRows.length,
-              outstanding: outstandingRows.length,
-            },
+            message: "Tally full payload stored successfully.",
+            sizeMB,
+            keys: Object.keys(data),
+            time: new Date().toISOString(),
           }),
           { headers: { "Content-Type": "application/json", ...cors } }
         );
@@ -162,12 +63,12 @@ export default {
       }
     }
 
-    // -------------- FIXED: LATEST FETCH ENDPOINT --------------
+    // -------------------- FETCH LATEST DATA ENDPOINT --------------------
     if (url.pathname === "/api/imports/latest" && request.method === "GET") {
       const kvValue = await env.REPLICA_DATA.get("latest_tally_json");
       if (!kvValue) {
         return new Response(
-          JSON.stringify({ status: "empty", rows: [] }),
+          JSON.stringify({ status: "empty", message: "No data found." }),
           { headers: { "Content-Type": "application/json", ...cors } }
         );
       }
@@ -179,35 +80,12 @@ export default {
         parsed = { raw: kvValue };
       }
 
-      if (parsed.salesXml || parsed.purchaseXml || parsed.mastersXml) {
-        return new Response(
-          JSON.stringify({ status: "ok", compressed: true, ...parsed }),
-          { headers: { "Content-Type": "application/json", ...cors } }
-        );
-      }
-
-      if (Array.isArray(parsed.rows)) {
-        return new Response(
-          JSON.stringify({ status: "ok", rows: parsed.rows }),
-          { headers: { "Content-Type": "application/json", ...cors } }
-        );
-      }
-
-      const arrayCandidate = Object.values(parsed).find((v) => Array.isArray(v));
-      if (arrayCandidate) {
-        return new Response(
-          JSON.stringify({ status: "ok", rows: arrayCandidate }),
-          { headers: { "Content-Type": "application/json", ...cors } }
-        );
-      }
-
-      return new Response(
-        JSON.stringify({ status: "ok", raw: parsed }),
-        { headers: { "Content-Type": "application/json", ...cors } }
-      );
+      return new Response(JSON.stringify(parsed), {
+        headers: { "Content-Type": "application/json", ...cors },
+      });
     }
 
-    // Default 404
+    // -------------------- 404 DEFAULT --------------------
     return new Response("404 Not Found", { status: 404, headers: cors });
   },
 };
