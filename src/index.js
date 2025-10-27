@@ -196,17 +196,51 @@ export default {
       }
     }
 
-    // ------------------ LATEST FETCH ENDPOINT ------------------
-    if (url.pathname === "/api/imports/latest" && request.method === "GET") {
-      const data = await env.REPLICA_DATA.get("latest_tally_json");
-      if (!data)
-        return new Response(JSON.stringify({ status: "empty", rows: {} }), {
-          headers: { "Content-Type": "application/json", ...cors },
-        });
-      return new Response(data, { headers: { "Content-Type": "application/json", ...cors } });
-    }
+// -------------- FIXED: LATEST FETCH ENDPOINT --------------
+if (url.pathname === "/api/imports/latest" && request.method === "GET") {
+  const kvValue = await env.REPLICA_DATA.get("latest_tally_json");
+  if (!kvValue) {
+    return new Response(
+      JSON.stringify({ status: "empty", rows: [] }),
+      { headers: { "Content-Type": "application/json", ...cors } }
+    );
+  }
 
-    // ------------------ DEFAULT 404 ------------------
-    return new Response("404 Not Found", { status: 404, headers: cors });
-  },
-};
+  let parsed;
+  try {
+    parsed = JSON.parse(kvValue);
+  } catch {
+    parsed = { raw: kvValue };
+  }
+
+  // If compressed XML exists, send decompression-ready JSON
+  if (parsed.salesXml || parsed.purchaseXml || parsed.mastersXml) {
+    return new Response(
+      JSON.stringify({ status: "ok", compressed: true, ...parsed }),
+      { headers: { "Content-Type": "application/json", ...cors } }
+    );
+  }
+
+  // Otherwise just send the object with rows or any detected array
+  if (Array.isArray(parsed.rows)) {
+    return new Response(
+      JSON.stringify({ status: "ok", rows: parsed.rows }),
+      { headers: { "Content-Type": "application/json", ...cors } }
+    );
+  }
+
+  // Fallback: try to detect array-like content
+  const arrayCandidate = Object.values(parsed).find((v) => Array.isArray(v));
+  if (arrayCandidate) {
+    return new Response(
+      JSON.stringify({ status: "ok", rows: arrayCandidate }),
+      { headers: { "Content-Type": "application/json", ...cors } }
+    );
+  }
+
+  // Otherwise return as-is
+  return new Response(
+    JSON.stringify({ status: "ok", raw: parsed }),
+    { headers: { "Content-Type": "application/json", ...cors } }
+  );
+}
