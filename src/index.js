@@ -1,4 +1,4 @@
-// ✅ index.js — FULL FIXED BACKEND (for latest_tally_json only)
+// ✅ index.js — Cloudflare Worker compatible (no Buffer)
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -8,13 +8,13 @@ export default {
       "Access-Control-Allow-Headers": "Content-Type, Authorization",
     };
 
-    if (request.method === "OPTIONS") return new Response(null, { headers: cors });
+    if (request.method === "OPTIONS")
+      return new Response(null, { headers: cors });
 
-    // Root test
     if (url.pathname === "/")
       return new Response("Replica Unified Backend Active ✅", { headers: cors });
 
-    // -------------------- TEST ROUTE --------------------
+    // ------------------ TEST ROUTE ------------------
     if (url.pathname === "/api/test") {
       return new Response(
         JSON.stringify({
@@ -26,7 +26,7 @@ export default {
       );
     }
 
-    // -------------------- MAIN PUSH ENDPOINT --------------------
+    // ------------------ MAIN PUSH ENDPOINT ------------------
     if (url.pathname === "/api/push/tally" && request.method === "POST") {
       try {
         const ct = request.headers.get("content-type") || "";
@@ -35,20 +35,23 @@ export default {
 
         const data = await request.json();
         const jsonStr = JSON.stringify(data);
-        const sizeMB = (Buffer.byteLength(jsonStr) / 1024 / 1024).toFixed(2);
+
+        // calculate size safely without Buffer
+        const encoder = new TextEncoder();
+        const sizeMB = (encoder.encode(jsonStr).length / 1024 / 1024).toFixed(2);
 
         if (sizeMB < 0.05)
           return new Response("Empty or invalid data", { status: 400, headers: cors });
 
-        // 🔹 Store ONLY one unified key in KV
+        // Store single unified key
         await env.REPLICA_DATA.put("latest_tally_json", jsonStr, {
-          expirationTtl: 60 * 60 * 24 * 7, // keep 7 days
+          expirationTtl: 60 * 60 * 24 * 7,
         });
 
         return new Response(
           JSON.stringify({
             success: true,
-            message: "Tally full payload stored successfully.",
+            message: "Full payload stored successfully.",
             sizeMB,
             keys: Object.keys(data),
             time: new Date().toISOString(),
@@ -63,12 +66,12 @@ export default {
       }
     }
 
-    // -------------------- FETCH LATEST DATA ENDPOINT --------------------
+    // ------------------ FETCH LATEST ENDPOINT ------------------
     if (url.pathname === "/api/imports/latest" && request.method === "GET") {
       const kvValue = await env.REPLICA_DATA.get("latest_tally_json");
       if (!kvValue) {
         return new Response(
-          JSON.stringify({ status: "empty", message: "No data found." }),
+          JSON.stringify({ status: "empty", message: "No data found" }),
           { headers: { "Content-Type": "application/json", ...cors } }
         );
       }
@@ -85,7 +88,7 @@ export default {
       });
     }
 
-    // -------------------- 404 DEFAULT --------------------
+    // ------------------ DEFAULT 404 ------------------
     return new Response("404 Not Found", { status: 404, headers: cors });
   },
 };
