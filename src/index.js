@@ -1,6 +1,8 @@
-// ✅ index.js — Cloudflare Worker compatible (no Buffer)
+// ✅ FINAL index.js — with GZIP decode + XML parse + Full output
+import { gunzipSync } from "fflate";
+
 export default {
-  async fetch(request, env, ctx) {
+  async fetch(request, env) {
     const url = new URL(request.url);
     const cors = {
       "Access-Control-Allow-Origin": "*",
@@ -8,53 +10,95 @@ export default {
       "Access-Control-Allow-Headers": "Content-Type, Authorization",
     };
 
-    if (request.method === "OPTIONS")
-      return new Response(null, { headers: cors });
+    if (request.method === "OPTIONS") return new Response(null, { headers: cors });
 
-    if (url.pathname === "/")
-      return new Response("Replica Unified Backend Active ✅", { headers: cors });
+    if (url.pathname === "/") return new Response("Replica Backend Active ✅", { headers: cors });
 
-    // ------------------ TEST ROUTE ------------------
-    if (url.pathname === "/api/test") {
+    if (url.pathname === "/api/test")
       return new Response(
-        JSON.stringify({
-          status: "ok",
-          message: "Backend Live",
-          time: new Date().toISOString(),
-        }),
+        JSON.stringify({ status: "ok", time: new Date().toISOString() }),
         { headers: { "Content-Type": "application/json", ...cors } }
       );
-    }
 
-    // ------------------ MAIN PUSH ENDPOINT ------------------
+    // ---------------- PUSH ENDPOINT ----------------
     if (url.pathname === "/api/push/tally" && request.method === "POST") {
       try {
-        const ct = request.headers.get("content-type") || "";
-        if (!ct.includes("application/json"))
-          return new Response("Invalid Content-Type", { status: 400, headers: cors });
-
         const data = await request.json();
-        const jsonStr = JSON.stringify(data);
+        const decodeBase64 = (b64) => {
+          try {
+            if (!b64) return "";
+            const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+            return new TextDecoder().decode(gunzipSync(bin));
+          } catch {
+            return "";
+          }
+        };
 
-        // calculate size safely without Buffer
-        const encoder = new TextEncoder();
-        const sizeMB = (encoder.encode(jsonStr).length / 1024 / 1024).toFixed(2);
+        const xmlSales = decodeBase64(data.salesXml);
+        const xmlPurchase = decodeBase64(data.purchaseXml);
+        const xmlMasters = decodeBase64(data.mastersXml);
 
-        if (sizeMB < 0.05)
-          return new Response("Empty or invalid data", { status: 400, headers: cors });
+        const extractBlocks = (xml, tag) =>
+          xml.match(new RegExp(`<${tag}[\\s\\S]*?<\\/${tag}>`, "gi")) || [];
+        const getTag = (block, tag) => {
+          const match = block.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, "i"));
+          return match ? match[1].trim() : "";
+        };
 
-        // Store single unified key
-        await env.REPLICA_DATA.put("latest_tally_json", jsonStr, {
-          expirationTtl: 60 * 60 * 24 * 7,
-        });
+        const salesRows = [];
+        for (const v of extractBlocks(xmlSales, "VOUCHER")) {
+          salesRows.push({
+            Voucher: getTag(v, "VOUCHERTYPENAME"),
+            Date: getTag(v, "DATE"),
+            Party: getTag(v, "PARTYNAME"),
+            Item: getTag(v, "STOCKITEMNAME"),
+            Qty: getTag(v, "BILLEDQTY"),
+            Amount: parseFloat(getTag(v, "AMOUNT") || "0"),
+            Salesman: getTag(v, "BASICSALESNAME"),
+          });
+        }
 
+        const purchaseRows = [];
+        for (const v of extractBlocks(xmlPurchase, "VOUCHER")) {
+          purchaseRows.push({
+            Voucher: getTag(v, "VOUCHERTYPENAME"),
+            Date: getTag(v, "DATE"),
+            Party: getTag(v, "PARTYNAME"),
+            Item: getTag(v, "STOCKITEMNAME"),
+            Qty: getTag(v, "BILLEDQTY"),
+            Amount: parseFloat(getTag(v, "AMOUNT") || "0"),
+          });
+        }
+
+        const masterRows = [];
+        for (const l of extractBlocks(xmlMasters, "LEDGER")) {
+          masterRows.push({
+            Type: "Ledger",
+            Name: getTag(l, "NAME"),
+            Closing: getTag(l, "CLOSINGBALANCE"),
+          });
+        }
+
+        const payload = {
+          status: "ok",
+          time: new Date().toISOString(),
+          rows: {
+            sales: salesRows,
+            purchase: purchaseRows,
+            masters: masterRows,
+          },
+        };
+
+        await env.REPLICA_DATA.put("latest_tally_json", JSON.stringify(payload));
         return new Response(
           JSON.stringify({
             success: true,
-            message: "Full payload stored successfully.",
-            sizeMB,
-            keys: Object.keys(data),
-            time: new Date().toISOString(),
+            message: "Parsed & Stored",
+            count: {
+              sales: salesRows.length,
+              purchase: purchaseRows.length,
+              masters: masterRows.length,
+            },
           }),
           { headers: { "Content-Type": "application/json", ...cors } }
         );
@@ -66,29 +110,17 @@ export default {
       }
     }
 
-    // ------------------ FETCH LATEST ENDPOINT ------------------
+    // ---------------- FETCH ENDPOINT ----------------
     if (url.pathname === "/api/imports/latest" && request.method === "GET") {
-      const kvValue = await env.REPLICA_DATA.get("latest_tally_json");
-      if (!kvValue) {
+      const kv = await env.REPLICA_DATA.get("latest_tally_json");
+      if (!kv)
         return new Response(
-          JSON.stringify({ status: "empty", message: "No data found" }),
+          JSON.stringify({ status: "empty" }),
           { headers: { "Content-Type": "application/json", ...cors } }
         );
-      }
-
-      let parsed;
-      try {
-        parsed = JSON.parse(kvValue);
-      } catch {
-        parsed = { raw: kvValue };
-      }
-
-      return new Response(JSON.stringify(parsed), {
-        headers: { "Content-Type": "application/json", ...cors },
-      });
+      return new Response(kv, { headers: { "Content-Type": "application/json", ...cors } });
     }
 
-    // ------------------ DEFAULT 404 ------------------
     return new Response("404 Not Found", { status: 404, headers: cors });
   },
 };
