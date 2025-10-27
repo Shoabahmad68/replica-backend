@@ -28,23 +28,19 @@ export default {
           return new Response("Invalid Content-Type", { status: 400, headers: cors });
 
         const body = await request.json();
-
-        // Incoming XMLs (may be missing)
         const xmlSales = body.salesXml || "";
         const xmlPurchase = body.purchaseXml || "";
         const xmlMasters = body.mastersXml || "";
         const xmlOutstanding = body.outstandingXml || "";
 
-        // Parser helper
         const extractBlocks = (xml, tag) => xml.match(new RegExp(`<${tag}[\\s\\S]*?<\\/${tag}>`, "gi")) || [];
         const getTag = (block, tag) => {
           const match = block.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, "i"));
           return match ? match[1].trim() : "";
         };
 
-        // ---------- SALES ----------
         const salesRows = [];
-        if (xmlSales && xmlSales.includes("<VOUCHER")) {
+        if (xmlSales.includes("<VOUCHER")) {
           const vouchers = extractBlocks(xmlSales, "VOUCHER");
           for (const v of vouchers) {
             const amt = parseFloat(getTag(v, "AMOUNT") || "0");
@@ -63,9 +59,8 @@ export default {
           }
         }
 
-        // ---------- PURCHASE ----------
         const purchaseRows = [];
-        if (xmlPurchase && xmlPurchase.includes("<VOUCHER")) {
+        if (xmlPurchase.includes("<VOUCHER")) {
           const vouchers = extractBlocks(xmlPurchase, "VOUCHER");
           for (const v of vouchers) {
             purchaseRows.push({
@@ -81,9 +76,8 @@ export default {
           }
         }
 
-        // ---------- MASTERS (LEDGERS + STOCK ITEMS) ----------
         const masterRows = [];
-        if (xmlMasters && xmlMasters.includes("<LEDGER")) {
+        if (xmlMasters.includes("<LEDGER")) {
           const ledgers = extractBlocks(xmlMasters, "LEDGER");
           for (const l of ledgers) {
             masterRows.push({
@@ -95,7 +89,7 @@ export default {
             });
           }
         }
-        if (xmlMasters && xmlMasters.includes("<STOCKITEM")) {
+        if (xmlMasters.includes("<STOCKITEM")) {
           const stocks = extractBlocks(xmlMasters, "STOCKITEM");
           for (const s of stocks) {
             masterRows.push({
@@ -107,9 +101,8 @@ export default {
           }
         }
 
-        // ---------- OUTSTANDING ----------
         const outstandingRows = [];
-        if (xmlOutstanding && xmlOutstanding.includes("<LEDGER")) {
+        if (xmlOutstanding.includes("<LEDGER")) {
           const ledgers = extractBlocks(xmlOutstanding, "LEDGER");
           for (const l of ledgers) {
             outstandingRows.push({
@@ -120,7 +113,6 @@ export default {
           }
         }
 
-        // ---------- अगर चारों XML खाली हों तो पुराना data retain करो ----------
         const totalRecords =
           salesRows.length + purchaseRows.length + masterRows.length + outstandingRows.length;
         if (totalRecords === 0) {
@@ -136,40 +128,14 @@ export default {
           );
         }
 
-        // ---------- Excel-style header structure ----------
-        const blank = {};
-        const salesHeader = {
-          "Voucher Type": "Voucher Type",
-          Date: "Date",
-          Party: "Party",
-          Item: "Item",
-          Qty: "Qty",
-          Amount: "Amount",
-          State: "State",
-          Salesman: "Salesman",
-        };
-        const purchaseHeader = { ...salesHeader };
-        const masterHeader = {
-          Type: "Type",
-          Name: "Name",
-          Opening: "Opening",
-          Closing: "Closing",
-          Email: "Email",
-        };
-        const outstandingHeader = {
-          Party: "Party",
-          Closing: "Closing",
-          Contact: "Contact",
-        };
-
         const combinedPayload = {
           status: "ok",
           time: new Date().toISOString(),
           rows: {
-            sales: [blank, salesHeader, ...salesRows],
-            purchase: [blank, purchaseHeader, ...purchaseRows],
-            masters: [blank, masterHeader, ...masterRows],
-            outstanding: [blank, outstandingHeader, ...outstandingRows],
+            sales: salesRows,
+            purchase: purchaseRows,
+            masters: masterRows,
+            outstanding: outstandingRows,
           },
         };
 
@@ -196,51 +162,52 @@ export default {
       }
     }
 
-// -------------- FIXED: LATEST FETCH ENDPOINT --------------
-if (url.pathname === "/api/imports/latest" && request.method === "GET") {
-  const kvValue = await env.REPLICA_DATA.get("latest_tally_json");
-  if (!kvValue) {
-    return new Response(
-      JSON.stringify({ status: "empty", rows: [] }),
-      { headers: { "Content-Type": "application/json", ...cors } }
-    );
-  }
+    // -------------- FIXED: LATEST FETCH ENDPOINT --------------
+    if (url.pathname === "/api/imports/latest" && request.method === "GET") {
+      const kvValue = await env.REPLICA_DATA.get("latest_tally_json");
+      if (!kvValue) {
+        return new Response(
+          JSON.stringify({ status: "empty", rows: [] }),
+          { headers: { "Content-Type": "application/json", ...cors } }
+        );
+      }
 
-  let parsed;
-  try {
-    parsed = JSON.parse(kvValue);
-  } catch {
-    parsed = { raw: kvValue };
-  }
+      let parsed;
+      try {
+        parsed = JSON.parse(kvValue);
+      } catch {
+        parsed = { raw: kvValue };
+      }
 
-  // If compressed XML exists, send decompression-ready JSON
-  if (parsed.salesXml || parsed.purchaseXml || parsed.mastersXml) {
-    return new Response(
-      JSON.stringify({ status: "ok", compressed: true, ...parsed }),
-      { headers: { "Content-Type": "application/json", ...cors } }
-    );
-  }
+      if (parsed.salesXml || parsed.purchaseXml || parsed.mastersXml) {
+        return new Response(
+          JSON.stringify({ status: "ok", compressed: true, ...parsed }),
+          { headers: { "Content-Type": "application/json", ...cors } }
+        );
+      }
 
-  // Otherwise just send the object with rows or any detected array
-  if (Array.isArray(parsed.rows)) {
-    return new Response(
-      JSON.stringify({ status: "ok", rows: parsed.rows }),
-      { headers: { "Content-Type": "application/json", ...cors } }
-    );
-  }
+      if (Array.isArray(parsed.rows)) {
+        return new Response(
+          JSON.stringify({ status: "ok", rows: parsed.rows }),
+          { headers: { "Content-Type": "application/json", ...cors } }
+        );
+      }
 
-  // Fallback: try to detect array-like content
-  const arrayCandidate = Object.values(parsed).find((v) => Array.isArray(v));
-  if (arrayCandidate) {
-    return new Response(
-      JSON.stringify({ status: "ok", rows: arrayCandidate }),
-      { headers: { "Content-Type": "application/json", ...cors } }
-    );
-  }
+      const arrayCandidate = Object.values(parsed).find((v) => Array.isArray(v));
+      if (arrayCandidate) {
+        return new Response(
+          JSON.stringify({ status: "ok", rows: arrayCandidate }),
+          { headers: { "Content-Type": "application/json", ...cors } }
+        );
+      }
 
-  // Otherwise return as-is
-  return new Response(
-    JSON.stringify({ status: "ok", raw: parsed }),
-    { headers: { "Content-Type": "application/json", ...cors } }
-  );
-}
+      return new Response(
+        JSON.stringify({ status: "ok", raw: parsed }),
+        { headers: { "Content-Type": "application/json", ...cors } }
+      );
+    }
+
+    // Default 404
+    return new Response("404 Not Found", { status: 404, headers: cors });
+  },
+};
