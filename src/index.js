@@ -55,75 +55,118 @@ export default {
       return matches;
     };
 
+
+// ✅ नया helper function: सभी simple XML टैग्स को key-value में निकालता है
+const getAllTagPairs = (text) => {
+  if (!text) return [];
+  const re = /<([A-Z0-9_.:-]+)>([\s\S]*?)<\/\1>/gi;
+  const out = [];
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const tag = m[1].trim();
+    const val = (m[2] || "").trim();
+    // केवल simple tags को लो (nested टैग वाले को छोड़ दो)
+    if (!/<[A-Z0-9_.:-]+>/i.test(val)) {
+      out.push({ tag, value: val });
+    }
+  }
+  return out;
+};
+
     // map common voucher-level tags to friendly keys
-    const parseVoucher = (vXml) => {
-      const voucher = {
-        VoucherType: getTag(vXml, "VOUCHERTYPENAME"),
-        VoucherNumber: getTag(vXml, "VOUCHERNUMBER") || getTag(vXml, "VOUCHERKEY"),
-        Date: getTag(vXml, "DATE"),
-        PartyName: getTag(vXml, "PARTYNAME") || getTag(vXml, "PARTYGSTIN") || getTag(vXml, "PARTYLEDGERNAME"),
-        PartyLedger: getTag(vXml, "PARTYLEDGERNAME"),
-        VoucherNarration: getTag(vXml, "NARRATION"),
-        VoucherAmount: parseFloat(getTag(vXml, "AMOUNT") || "0"),
-        VchType: getTag(vXml, "VCHTYPE") || getTag(vXml, "VOUCHERTYPENAME"),
-        InvoiceNo: getTag(vXml, "BILLALLOCATIONS.LIST>NAME") || "",
-        Salesman: getTag(vXml, "BASICSALESNAME") || getTag(vXml, "SALESMAN"),
-        Reference: getTag(vXml, "REFERENCE") || getTag(vXml, "INVOICENO") || "",
-        // keep raw xml for debugging
-        __raw: vXml,
-      };
+// ✅ नया और पूरा parseVoucher function
+const parseVoucher = (vXml) => {
+  const voucher = {
+    VoucherType: getTag(vXml, "VOUCHERTYPENAME"),
+    VoucherNumber: getTag(vXml, "VOUCHERNUMBER") || getTag(vXml, "VOUCHERKEY"),
+    Date: getTag(vXml, "DATE"),
+    PartyName: getTag(vXml, "PARTYNAME") || getTag(vXml, "PARTYGSTIN") || getTag(vXml, "PARTYLEDGERNAME"),
+    PartyLedger: getTag(vXml, "PARTYLEDGERNAME"),
+    VoucherNarration: getTag(vXml, "NARRATION"),
+    VoucherAmount: parseFloat(getTag(vXml, "AMOUNT") || "0") || 0,
+    VchType: getTag(vXml, "VCHTYPE") || getTag(vXml, "VOUCHERTYPENAME"),
+    InvoiceNo: getTag(vXml, "BILLALLOCATIONS.LIST>NAME") || "",
+    Salesman: getTag(vXml, "BASICSALESNAME") || getTag(vXml, "SALESMAN") || getTag(vXml, "BASICSALESMAN") || "",
+    Reference: getTag(vXml, "REFERENCE") || getTag(vXml, "INVOICENO") || "",
+    __raw: vXml,
+  };
 
-      // extract ledger entries if present
-      const ledgerEntries = [];
-      for (const l of extractBlocks(vXml, "LEDGERENTRIES.LIST")) {
-        ledgerEntries.push({
-          LedgerName: getTag(l, "LEDGERNAME"),
-          Amount: parseFloat(getTag(l, "AMOUNT") || "0"),
-          Narration: getTag(l, "NARRATION"),
-        });
+  // ✅ Voucher में जितने भी simple टैग हैं उन्हें भी जोड़ दो
+  try {
+    const pairs = getAllTagPairs(vXml);
+    for (const p of pairs) {
+      const key = p.tag.replace(/[^A-Za-z0-9_]/g, "_");
+      if (!(key in voucher)) {
+        voucher[key] = p.value;
       }
-      voucher.LedgerEntries = ledgerEntries;
+    }
+  } catch (e) {
+    console.warn("getAllTagPairs failed:", e?.message || e);
+  }
 
-      // extract item rows (inventory entries)
-      const itemRows = [];
-      for (const it of extractBlocks(vXml, "ALLINVENTORYENTRIES.LIST")) {
-        const item = {
-          StockItemName: getTag(it, "STOCKITEMNAME") || getTag(it, "NAME"),
-          ItemGroup: getTag(it, "STOCKGROUPNAME") || getTag(it, "ITEMGROUP"),
-          ItemCategory: getTag(it, "CATEGORY") || getTag(it, "ITEMCATEGORY"),
-          BilledQty: getTag(it, "BILLEDQTY") || getTag(it, "ACTUALQTY") || getTag(it, "ACTUALQTY"), // fallbacks
-          AltQty: getTag(it, "ALTQTY") || "",
-          Rate: parseFloat(getTag(it, "RATE") || "0"),
-          Amount: parseFloat(getTag(it, "AMOUNT") || "0"),
-          UOM: getTag(it, "UOM") || getTag(it, "UOMNAME") || "",
-          BatchName: getTag(it, "BATCHNAME") || "",
-          Godown: getTag(it, "GODOWNNAME") || "",
-          Narration: getTag(it, "NARRATION") || "",
-        };
-        itemRows.push(item);
-      }
+  // ✅ Ledger entries (जैसे पहले था)
+  const ledgerEntries = [];
+  for (const l of extractBlocks(vXml, "LEDGERENTRIES.LIST")) {
+    ledgerEntries.push({
+      LedgerName: getTag(l, "LEDGERNAME"),
+      Amount: parseFloat(getTag(l, "AMOUNT") || "0") || 0,
+      Narration: getTag(l, "NARRATION"),
+    });
+  }
+  voucher.LedgerEntries = ledgerEntries;
 
-      // if no ALLINVENTORYENTRIES.LIST blocks, try STOCKITEMNAME direct (some exports)
-      if (itemRows.length === 0) {
-        const stockNames = getAllTags(vXml, "STOCKITEMNAME");
-        const rates = getAllTags(vXml, "RATE");
-        const qtys = getAllTags(vXml, "BILLEDQTY");
-        for (let i = 0; i < stockNames.length; i++) {
-          itemRows.push({
-            StockItemName: stockNames[i] || "",
-            BilledQty: qtys[i] || "",
-            Rate: parseFloat(rates[i] || "0"),
-            Amount: parseFloat((getAllTags(vXml, "AMOUNT")[i] || "0")),
-            ItemGroup: "",
-            AltQty: "",
-            UOM: "",
-          });
-        }
-      }
-
-      voucher.Items = itemRows;
-      return voucher;
+  // ✅ Item rows (Inventory entries)
+  const itemRows = [];
+  for (const it of extractBlocks(vXml, "ALLINVENTORYENTRIES.LIST")) {
+    const item = {
+      StockItemName: getTag(it, "STOCKITEMNAME") || getTag(it, "NAME"),
+      ItemGroup: getTag(it, "STOCKGROUPNAME") || getTag(it, "ITEMGROUP"),
+      ItemCategory: getTag(it, "CATEGORY") || getTag(it, "ITEMCATEGORY"),
+      BilledQty: getTag(it, "BILLEDQTY") || getTag(it, "ACTUALQTY") || "",
+      AltQty: getTag(it, "ALTQTY") || "",
+      Rate: parseFloat(getTag(it, "RATE") || "0") || 0,
+      Amount: parseFloat(getTag(it, "AMOUNT") || "0") || 0,
+      UOM: getTag(it, "UOM") || getTag(it, "UOMNAME") || "",
+      BatchName: getTag(it, "BATCHNAME") || "",
+      Godown: getTag(it, "GODOWNNAME") || "",
+      Narration: getTag(it, "NARRATION") || "",
     };
+
+    // Item-level में भी सारे टैग include करो
+    try {
+      const ipairs = getAllTagPairs(it);
+      for (const p of ipairs) {
+        const k = p.tag.replace(/[^A-Za-z0-9_]/g, "_");
+        if (!(k in item)) item[k] = p.value;
+      }
+    } catch (e) {
+      console.warn("getAllTagPairs(item) failed:", e?.message || e);
+    }
+
+    itemRows.push(item);
+  }
+
+  // ✅ fallback case
+  if (itemRows.length === 0) {
+    const stockNames = getAllTags(vXml, "STOCKITEMNAME");
+    const rates = getAllTags(vXml, "RATE");
+    const qtys = getAllTags(vXml, "BILLEDQTY");
+    for (let i = 0; i < stockNames.length; i++) {
+      itemRows.push({
+        StockItemName: stockNames[i] || "",
+        BilledQty: qtys[i] || "",
+        Rate: parseFloat(rates[i] || "0") || 0,
+        Amount: parseFloat((getAllTags(vXml, "AMOUNT")[i] || "0")) || 0,
+        ItemGroup: "",
+        AltQty: "",
+        UOM: "",
+      });
+    }
+  }
+
+  voucher.Items = itemRows;
+  return voucher;
+};
 
     // parse outstanding reports into row list (flexible)
     const parseOutstanding = (xml) => {
@@ -237,6 +280,21 @@ export default {
 
         const outstandingReceivableRows = parseOutstanding(xmlOutstandingRec);
         const outstandingPayableRows = parseOutstanding(xmlOutstandingPay);
+
+// ✅ Debug output – देखने के लिए कौन-कौन से column आ रहे हैं
+try {
+  const sample = salesRows.slice(0, 6);
+  console.log("☑️ sample salesRows count:", salesRows.length, "sample keys:");
+  const allKeys = new Set();
+  for (const r of salesRows.slice(0, Math.min(salesRows.length, 200))) {
+    Object.keys(r).forEach(k => allKeys.add(k));
+  }
+  console.log(Array.from(allKeys).sort());
+  console.log("☑️ sample row[0]:", JSON.stringify(sample[0] || {}, null, 2).slice(0, 2000));
+} catch (e) {
+  console.warn("debug print failed", e?.message || e);
+}
+
 
         // final normalized payload (keeps raw xml too for debugging)
         const finalPayload = {
