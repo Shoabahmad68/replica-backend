@@ -55,123 +55,113 @@ export default {
       return matches;
     };
 
-
-// ✅ नया helper function: सभी simple XML टैग्स को key-value में निकालता है
-const getAllTagPairs = (text) => {
-  if (!text) return [];
-  const re = /<([A-Z0-9_.:-]+)>([\s\S]*?)<\/\1>/gi;
-  const out = [];
-  let m;
-  while ((m = re.exec(text)) !== null) {
-    const tag = m[1].trim();
-    const val = (m[2] || "").trim();
-    // केवल simple tags को लो (nested टैग वाले को छोड़ दो)
-    if (!/<[A-Z0-9_.:-]+>/i.test(val)) {
-      out.push({ tag, value: val });
-    }
-  }
-  return out;
-};
-
-    // map common voucher-level tags to friendly keys
-// ✅ नया और पूरा parseVoucher function
-const parseVoucher = (vXml) => {
-  const voucher = {
-    VoucherType: getTag(vXml, "VOUCHERTYPENAME"),
-    VoucherNumber: getTag(vXml, "VOUCHERNUMBER") || getTag(vXml, "VOUCHERKEY"),
-    Date: getTag(vXml, "DATE"),
-    PartyName: getTag(vXml, "PARTYNAME") || getTag(vXml, "PARTYGSTIN") || getTag(vXml, "PARTYLEDGERNAME"),
-    PartyLedger: getTag(vXml, "PARTYLEDGERNAME"),
-    VoucherNarration: getTag(vXml, "NARRATION"),
-    VoucherAmount: parseFloat(getTag(vXml, "AMOUNT") || "0") || 0,
-    VchType: getTag(vXml, "VCHTYPE") || getTag(vXml, "VOUCHERTYPENAME"),
-    InvoiceNo: getTag(vXml, "BILLALLOCATIONS.LIST>NAME") || "",
-    Salesman: getTag(vXml, "BASICSALESNAME") || getTag(vXml, "SALESMAN") || getTag(vXml, "BASICSALESMAN") || "",
-    Reference: getTag(vXml, "REFERENCE") || getTag(vXml, "INVOICENO") || "",
-    __raw: vXml,
-  };
-
-  // ✅ Voucher में जितने भी simple टैग हैं उन्हें भी जोड़ दो
-  try {
-    const pairs = getAllTagPairs(vXml);
-    for (const p of pairs) {
-      const key = p.tag.replace(/[^A-Za-z0-9_]/g, "_");
-      if (!(key in voucher)) {
-        voucher[key] = p.value;
+    // return array of {tag, value} for simple tags at top-level inside a block
+    const getAllTagPairs = (text) => {
+      if (!text) return [];
+      const re = /<([A-Z0-9_.:-]+)>([\s\S]*?)<\/\1>/gi;
+      const out = [];
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        const tag = m[1].trim();
+        const val = (m[2] || "").trim();
+        // skip tags that contain nested child tags (we only want simple text tags)
+        if (!/<[A-Z0-9_.:-]+>/i.test(val)) {
+          out.push({ tag, value: val });
+        }
       }
-    }
-  } catch (e) {
-    console.warn("getAllTagPairs failed:", e?.message || e);
-  }
-
-  // ✅ Ledger entries (जैसे पहले था)
-  const ledgerEntries = [];
-  for (const l of extractBlocks(vXml, "LEDGERENTRIES.LIST")) {
-    ledgerEntries.push({
-      LedgerName: getTag(l, "LEDGERNAME"),
-      Amount: parseFloat(getTag(l, "AMOUNT") || "0") || 0,
-      Narration: getTag(l, "NARRATION"),
-    });
-  }
-  voucher.LedgerEntries = ledgerEntries;
-
-  // ✅ Item rows (Inventory entries)
-  const itemRows = [];
-  for (const it of extractBlocks(vXml, "ALLINVENTORYENTRIES.LIST")) {
-    const item = {
-      StockItemName: getTag(it, "STOCKITEMNAME") || getTag(it, "NAME"),
-      ItemGroup: getTag(it, "STOCKGROUPNAME") || getTag(it, "ITEMGROUP"),
-      ItemCategory: getTag(it, "CATEGORY") || getTag(it, "ITEMCATEGORY"),
-      BilledQty: getTag(it, "BILLEDQTY") || getTag(it, "ACTUALQTY") || "",
-      AltQty: getTag(it, "ALTQTY") || "",
-      Rate: parseFloat(getTag(it, "RATE") || "0") || 0,
-      Amount: parseFloat(getTag(it, "AMOUNT") || "0") || 0,
-      UOM: getTag(it, "UOM") || getTag(it, "UOMNAME") || "",
-      BatchName: getTag(it, "BATCHNAME") || "",
-      Godown: getTag(it, "GODOWNNAME") || "",
-      Narration: getTag(it, "NARRATION") || "",
+      return out;
     };
 
-    // Item-level में भी सारे टैग include करो
-    try {
-      const ipairs = getAllTagPairs(it);
-      for (const p of ipairs) {
-        const k = p.tag.replace(/[^A-Za-z0-9_]/g, "_");
-        if (!(k in item)) item[k] = p.value;
+    // parseVoucher (captures all simple tags + items + ledger entries)
+    const parseVoucher = (vXml) => {
+      const voucher = {
+        VoucherType: getTag(vXml, "VOUCHERTYPENAME"),
+        VoucherNumber: getTag(vXml, "VOUCHERNUMBER") || getTag(vXml, "VOUCHERKEY"),
+        Date: getTag(vXml, "DATE"),
+        PartyName: getTag(vXml, "PARTYNAME") || getTag(vXml, "PARTYGSTIN") || getTag(vXml, "PARTYLEDGERNAME"),
+        PartyLedger: getTag(vXml, "PARTYLEDGERNAME"),
+        VoucherNarration: getTag(vXml, "NARRATION"),
+        VoucherAmount: parseFloat(getTag(vXml, "AMOUNT") || "0") || 0,
+        VchType: getTag(vXml, "VCHTYPE") || getTag(vXml, "VOUCHERTYPENAME"),
+        InvoiceNo: getTag(vXml, "BILLALLOCATIONS.LIST>NAME") || "",
+        Salesman: getTag(vXml, "BASICSALESNAME") || getTag(vXml, "SALESMAN") || getTag(vXml, "BASICSALESMAN") || "",
+        Reference: getTag(vXml, "REFERENCE") || getTag(vXml, "INVOICENO") || "",
+        __raw: vXml,
+      };
+
+      try {
+        const pairs = getAllTagPairs(vXml);
+        for (const p of pairs) {
+          const key = p.tag.replace(/[^A-Za-z0-9_]/g, "_");
+          if (!(key in voucher)) voucher[key] = p.value;
+        }
+      } catch (e) {
+        console.warn("getAllTagPairs failed:", e?.message || e);
       }
-    } catch (e) {
-      console.warn("getAllTagPairs(item) failed:", e?.message || e);
-    }
 
-    itemRows.push(item);
-  }
+      const ledgerEntries = [];
+      for (const l of extractBlocks(vXml, "LEDGERENTRIES.LIST")) {
+        ledgerEntries.push({
+          LedgerName: getTag(l, "LEDGERNAME"),
+          Amount: parseFloat(getTag(l, "AMOUNT") || "0") || 0,
+          Narration: getTag(l, "NARRATION"),
+        });
+      }
+      voucher.LedgerEntries = ledgerEntries;
 
-  // ✅ fallback case
-  if (itemRows.length === 0) {
-    const stockNames = getAllTags(vXml, "STOCKITEMNAME");
-    const rates = getAllTags(vXml, "RATE");
-    const qtys = getAllTags(vXml, "BILLEDQTY");
-    for (let i = 0; i < stockNames.length; i++) {
-      itemRows.push({
-        StockItemName: stockNames[i] || "",
-        BilledQty: qtys[i] || "",
-        Rate: parseFloat(rates[i] || "0") || 0,
-        Amount: parseFloat((getAllTags(vXml, "AMOUNT")[i] || "0")) || 0,
-        ItemGroup: "",
-        AltQty: "",
-        UOM: "",
-      });
-    }
-  }
+      const itemRows = [];
+      for (const it of extractBlocks(vXml, "ALLINVENTORYENTRIES.LIST")) {
+        const item = {
+          StockItemName: getTag(it, "STOCKITEMNAME") || getTag(it, "NAME"),
+          ItemGroup: getTag(it, "STOCKGROUPNAME") || getTag(it, "ITEMGROUP"),
+          ItemCategory: getTag(it, "CATEGORY") || getTag(it, "ITEMCATEGORY"),
+          BilledQty: getTag(it, "BILLEDQTY") || getTag(it, "ACTUALQTY") || "",
+          AltQty: getTag(it, "ALTQTY") || "",
+          Rate: parseFloat(getTag(it, "RATE") || "0") || 0,
+          Amount: parseFloat(getTag(it, "AMOUNT") || "0") || 0,
+          UOM: getTag(it, "UOM") || getTag(it, "UOMNAME") || "",
+          BatchName: getTag(it, "BATCHNAME") || "",
+          Godown: getTag(it, "GODOWNNAME") || "",
+          Narration: getTag(it, "NARRATION") || "",
+        };
 
-  voucher.Items = itemRows;
-  return voucher;
-};
+        try {
+          const ipairs = getAllTagPairs(it);
+          for (const p of ipairs) {
+            const k = p.tag.replace(/[^A-Za-z0-9_]/g, "_");
+            if (!(k in item)) item[k] = p.value;
+          }
+        } catch (e) {
+          console.warn("getAllTagPairs(item) failed:", e?.message || e);
+        }
+
+        itemRows.push(item);
+      }
+
+      if (itemRows.length === 0) {
+        const stockNames = getAllTags(vXml, "STOCKITEMNAME");
+        const rates = getAllTags(vXml, "RATE");
+        const qtys = getAllTags(vXml, "BILLEDQTY");
+        for (let i = 0; i < stockNames.length; i++) {
+          itemRows.push({
+            StockItemName: stockNames[i] || "",
+            BilledQty: qtys[i] || "",
+            Rate: parseFloat(rates[i] || "0") || 0,
+            Amount: parseFloat((getAllTags(vXml, "AMOUNT")[i] || "0")) || 0,
+            ItemGroup: "",
+            AltQty: "",
+            UOM: "",
+          });
+        }
+      }
+
+      voucher.Items = itemRows;
+      return voucher;
+    };
 
     // parse outstanding reports into row list (flexible)
     const parseOutstanding = (xml) => {
       const rows = [];
-      // many Tally outstanding exports include <LEDGER/> or <OUTSTANDINGITEMS.LIST>
       for (const b of extractBlocks(xml, "LEDGER")) {
         rows.push({
           Name: getTag(b, "NAME"),
@@ -189,7 +179,6 @@ const parseVoucher = (vXml) => {
           __raw: b,
         });
       }
-      // fallback: simple TAG matches for ledger name + amount pairs
       if (rows.length === 0) {
         const names = getAllTags(xml, "NAME");
         const amts = getAllTags(xml, "AMOUNT");
@@ -223,7 +212,6 @@ const parseVoucher = (vXml) => {
           const outVouchers = [];
           for (const v of extractBlocks(xml, "VOUCHER")) {
             const parsed = parseVoucher(v);
-            // push a top-level voucher summary row
             outVouchers.push({
               type: "voucher_summary",
               VoucherType: parsed.VoucherType,
@@ -235,7 +223,6 @@ const parseVoucher = (vXml) => {
               Narration: parsed.VoucherNarration,
               LedgerEntries: parsed.LedgerEntries,
             });
-            // push separate item rows with voucher context
             for (const it of parsed.Items) {
               outVouchers.push({
                 type: "item_row",
@@ -281,22 +268,21 @@ const parseVoucher = (vXml) => {
         const outstandingReceivableRows = parseOutstanding(xmlOutstandingRec);
         const outstandingPayableRows = parseOutstanding(xmlOutstandingPay);
 
-// ✅ Debug output – देखने के लिए कौन-कौन से column आ रहे हैं
-try {
-  const sample = salesRows.slice(0, 6);
-  console.log("☑️ sample salesRows count:", salesRows.length, "sample keys:");
-  const allKeys = new Set();
-  for (const r of salesRows.slice(0, Math.min(salesRows.length, 200))) {
-    Object.keys(r).forEach(k => allKeys.add(k));
-  }
-  console.log(Array.from(allKeys).sort());
-  console.log("☑️ sample row[0]:", JSON.stringify(sample[0] || {}, null, 2).slice(0, 2000));
-} catch (e) {
-  console.warn("debug print failed", e?.message || e);
-}
+        // Debug output – check keys
+        try {
+          const sample = salesRows.slice(0, 6);
+          console.log("☑️ sample salesRows count:", salesRows.length, "sample keys:");
+          const allKeys = new Set();
+          for (const r of salesRows.slice(0, Math.min(salesRows.length, 200))) {
+            Object.keys(r).forEach(k => allKeys.add(k));
+          }
+          console.log(Array.from(allKeys).sort());
+          console.log("☑️ sample row[0]:", JSON.stringify(sample[0] || {}, null, 2).slice(0, 2000));
+        } catch (e) {
+          console.warn("debug print failed", e?.message || e);
+        }
 
-
-        // final normalized payload (keeps raw xml too for debugging)
+        // final normalized payload
         const finalPayload = {
           status: "ok",
           source: rawOriginal.bodyMeta.source,
@@ -325,7 +311,6 @@ try {
             outstandingReceivable: outstandingReceivableRows,
             outstandingPayable: outstandingPayableRows,
           },
-          // also store small raw blobs for debugging (not huge)
           rawSample: {
             salesHead: xmlSales ? xmlSales.slice(0, 4000) : "",
             purchaseHead: xmlPurchase ? xmlPurchase.slice(0, 4000) : "",
@@ -333,22 +318,49 @@ try {
           },
         };
 
-        // store JSON in KV
-        await env.REPLICA_DATA.put("latest_tally_json", JSON.stringify(finalPayload));
-
-        // also store raw compressed payload for backups (optional)
+        // ---------------- SAFE KV STORE (chunked, overwrite old) ----------------
         try {
-          await env.REPLICA_DATA.put("latest_tally_raw", JSON.stringify({
-            received: rawOriginal,
-            salesXmlHead: xmlSales ? xmlSales.slice(0, 20000) : "",
-            purchaseXmlHead: xmlPurchase ? xmlPurchase.slice(0, 20000) : "",
-          }));
+          // cleanup previous parts if any
+          try {
+            const listed = await env.REPLICA_DATA.list({ prefix: "latest_tally_json_part_" });
+            for (const k of listed.keys || []) {
+              try { await env.REPLICA_DATA.delete(k.name); } catch (_) {}
+            }
+            // also delete metadata key if exists
+            try { await env.REPLICA_DATA.delete("latest_tally_json"); } catch (_) {}
+          } catch (e) {
+            console.warn("KV cleanup list failed:", e?.message || e);
+          }
+
+          const dataStr = JSON.stringify(finalPayload);
+          const CHUNK_SIZE = 6_000_000; // ~6 million chars ~ safe under 25MB KV value limit
+          let idx = 0;
+          for (let i = 0; i < dataStr.length; i += CHUNK_SIZE) {
+            const part = dataStr.slice(i, i + CHUNK_SIZE);
+            await env.REPLICA_DATA.put(`latest_tally_json_part_${idx}`, part);
+            idx++;
+          }
+          // store metadata so frontend can fetch and reassemble
+          const meta = { parts: idx, storedAt: new Date().toISOString(), counts: finalPayload.counts };
+          await env.REPLICA_DATA.put("latest_tally_json", JSON.stringify(meta));
+
+          // optional small raw backup (only heads)
+          try {
+            await env.REPLICA_DATA.put("latest_tally_raw", JSON.stringify({
+              received: rawOriginal,
+              salesXmlHead: xmlSales ? xmlSales.slice(0, 20000) : "",
+              purchaseXmlHead: xmlPurchase ? xmlPurchase.slice(0, 20000) : "",
+            }));
+          } catch (e) {
+            console.warn("kv raw store issue", e?.message || e);
+          }
+
         } catch (e) {
-          // ignore kv write size errors silently
-          console.warn("kv raw store issue", e?.message || e);
+          console.warn("KV chunk store failed:", e?.message || e);
+          return new Response(JSON.stringify({ error: "KV store failed", detail: e?.message || e }), { status: 500, headers: { "Content-Type": "application/json", ...cors } });
         }
 
-        return new Response(JSON.stringify({ success: true, message: "Full parsed data stored successfully.", counts: finalPayload.counts }), {
+        return new Response(JSON.stringify({ success: true, message: "Full parsed data stored in chunks.", counts: finalPayload.counts }), {
           headers: { "Content-Type": "application/json", ...cors },
         });
       } catch (err) {
@@ -359,11 +371,28 @@ try {
       }
     }
 
-    // ------------------ FETCH ENDPOINT ------------------
+    // ------------------ FETCH ENDPOINT (assemble chunks) ------------------
     if (url.pathname === "/api/imports/latest" && request.method === "GET") {
-      const kv = await env.REPLICA_DATA.get("latest_tally_json");
-      if (!kv) return new Response(JSON.stringify({ status: "empty" }), { headers: { "Content-Type": "application/json", ...cors } });
-      return new Response(kv, { headers: { "Content-Type": "application/json", ...cors } });
+      try {
+        const meta = await env.REPLICA_DATA.get("latest_tally_json");
+        if (!meta) return new Response(JSON.stringify({ status: "empty" }), { headers: { "Content-Type": "application/json", ...cors } });
+
+        const metaJson = JSON.parse(meta);
+        if (metaJson.parts && Number.isInteger(metaJson.parts) && metaJson.parts > 0) {
+          let merged = "";
+          for (let i = 0; i < metaJson.parts; i++) {
+            const part = await env.REPLICA_DATA.get(`latest_tally_json_part_${i}`);
+            if (part) merged += part;
+          }
+          return new Response(merged, { headers: { "Content-Type": "application/json", ...cors } });
+        }
+
+        // fallback: if meta is actual payload string (older behaviour)
+        return new Response(meta, { headers: { "Content-Type": "application/json", ...cors } });
+
+      } catch (e) {
+        return new Response(JSON.stringify({ error: "Failed to fetch latest", detail: e?.message || e }), { status: 500, headers: { "Content-Type": "application/json", ...cors } });
+      }
     }
 
     return new Response("404 Not Found", { status: 404, headers: cors });
