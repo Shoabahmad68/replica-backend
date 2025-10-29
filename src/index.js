@@ -1,6 +1,3 @@
-import { Buffer } from 'node:buffer';
-import { gunzipSync } from 'node:zlib';
-
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -41,10 +38,8 @@ export default {
           
           if (compressedValue && compressedValue.length > 0) {
             try {
-              // Base64 decode करो
-              const buffer = Buffer.from(compressedValue, 'base64');
-              // Gunzip करो
-              const decompressed = gunzipSync(buffer).toString('utf8');
+              // Base64 decode करके decompress करो
+              const decompressed = await decompressGzip(compressedValue);
               decompressedData[key] = decompressed;
               console.log(`✅ ${key} decompress हो गया: ${Math.round(decompressed.length/1024)}KB`);
             } catch (e) {
@@ -190,6 +185,32 @@ export default {
     });
   }
 };
+
+// ✅ Cloudflare Workers में gzip decompress करने वाला function
+async function decompressGzip(base64String) {
+  try {
+    // Base64 को binary में convert करो
+    const binaryString = atob(base64String);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    
+    // Decompress करो using DecompressionStream
+    const ds = new DecompressionStream('gzip');
+    const writer = ds.writable.getWriter();
+    writer.write(bytes);
+    writer.close();
+    
+    const output = await new Response(ds.readable).arrayBuffer();
+    const decoder = new TextDecoder();
+    return decoder.decode(output);
+    
+  } catch (e) {
+    console.error("Decompression error:", e.message);
+    throw new Error(`Failed to decompress: ${e.message}`);
+  }
+}
 
 // ✅ XML को rows में convert करने वाला function
 function parseXMLToRows(xmlString, voucherType) {
