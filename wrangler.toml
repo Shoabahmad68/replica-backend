@@ -8,3 +8,8 @@ NODE_ENV = "production"
 [[kv_namespaces]]
 binding = "REPLICA_DATA"
 id = "d8a7ce64c2174f039a5013e9356384e9"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "replica_backend_db"
+database_id = "f6519a07-ce7c-406f-8880-0a2b15b6c5f8"
