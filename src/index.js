@@ -19,35 +19,62 @@ export default {
         time: new Date().toISOString() 
       }, { headers: cors });
 
-    // ✅ FIXED PUSH ENDPOINT - Your Original Working Code
+    // ✅ PERFECT PUSH ENDPOINT - Exact field names matching Pusher.js
     if (url.pathname === "/api/push/tally" && request.method === "POST") {
       try {
         const body = await request.json();
-        console.log("📥 Received data from pusher");
+        console.log("📥 Received data from Pusher.js");
 
-        // Store directly without processing
-        const storageData = {
+        // ✅ EXACT FIELD NAMES MATCHING PUSHER.JS
+        const receivedData = {
+          salesXml: body.salesXml || "",
+          purchaseXml: body.purchaseXml || "", 
+          receiptXml: body.receiptXml || "",
+          paymentXml: body.paymentXml || "",
+          journalXml: body.journalXml || "",
+          debitXml: body.debitXml || "",
+          creditXml: body.creditXml || "",
+          mastersXml: body.mastersXml || "",
+          outstandingXml: body.outstandingXml || ""
+        };
+
+        console.log("📊 Data received with fields:", Object.keys(receivedData));
+
+        // Create success response
+        const successData = {
           status: "ok",
-          source: body.source || "tally-pusher",
+          source: body.source || "tally-pusher-final",
           time: body.time || new Date().toISOString(),
-          received: true,
-          dataReceived: true
+          message: "Data received successfully",
+          receivedFields: Object.keys(receivedData).filter(key => receivedData[key])
         };
 
         // Save to KV
-        await env.REPLICA_DATA.put("latest_tally_data", JSON.stringify(storageData));
+        await env.REPLICA_DATA.put("latest_tally_data", JSON.stringify(successData));
         await env.REPLICA_DATA.put("latest_tally_json", JSON.stringify({
           storedAt: new Date().toISOString(),
-          source: body.source || "tally-pusher",
-          status: "data_available"
+          source: body.source || "tally-pusher-final",
+          status: "data_available",
+          counts: {
+            sales: receivedData.salesXml ? 1 : 0,
+            purchase: receivedData.purchaseXml ? 1 : 0,
+            receipt: receivedData.receiptXml ? 1 : 0,
+            payment: receivedData.paymentXml ? 1 : 0,
+            journal: receivedData.journalXml ? 1 : 0,
+            debit: receivedData.debitXml ? 1 : 0,
+            credit: receivedData.creditXml ? 1 : 0,
+            masters: receivedData.mastersXml ? 1 : 0,
+            outstanding: receivedData.outstandingXml ? 1 : 0
+          }
         }));
         
-        console.log("✅ Data stored successfully");
+        console.log("✅ Data stored in KV successfully");
         
         return Response.json({
           success: true,
           message: "Data received and stored successfully",
-          time: new Date().toISOString()
+          receivedFields: successData.receivedFields,
+          time: successData.time
         }, { headers: cors });
 
       } catch (err) {
@@ -62,7 +89,7 @@ export default {
       }
     }
 
-    // ✅ FIXED FETCH ENDPOINT - Simple and Working
+    // ✅ SIMPLE FETCH ENDPOINT
     if (url.pathname === "/api/imports/latest" && request.method === "GET") {
       try {
         const data = await env.REPLICA_DATA.get("latest_tally_data");
@@ -112,6 +139,7 @@ export default {
           status: "data_available",
           storedAt: metaJson.storedAt,
           source: metaJson.source,
+          counts: metaJson.counts,
           message: "Data is available at /api/imports/latest"
         }, { headers: cors });
 
