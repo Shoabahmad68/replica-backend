@@ -1,5 +1,3 @@
-konse json ki baat kar rahe ho kya ye file ka bol rahe ho kya jo backend ka package.json hai :
-
 {
   "name": "replica-backend",
   "description": "Complete backend API template using Hono + Chanfana + D1 + Vitest.",
