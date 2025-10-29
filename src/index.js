@@ -19,68 +19,45 @@ export default {
         time: new Date().toISOString() 
       }, { headers: cors });
 
-    // ✅ PERFECT PUSH ENDPOINT - Exact field names matching Pusher.js
+    // ✅ ULTRA SIMPLE PUSH ENDPOINT
     if (url.pathname === "/api/push/tally" && request.method === "POST") {
       try {
+        console.log("📥 PUSH ENDPOINT CALLED");
+        
         const body = await request.json();
-        console.log("📥 Received data from Pusher.js");
-
-        // ✅ EXACT FIELD NAMES MATCHING PUSHER.JS
-        const receivedData = {
-          salesXml: body.salesXml || "",
-          purchaseXml: body.purchaseXml || "", 
-          receiptXml: body.receiptXml || "",
-          paymentXml: body.paymentXml || "",
-          journalXml: body.journalXml || "",
-          debitXml: body.debitXml || "",
-          creditXml: body.creditXml || "",
-          mastersXml: body.mastersXml || "",
-          outstandingXml: body.outstandingXml || ""
-        };
-
-        console.log("📊 Data received with fields:", Object.keys(receivedData));
-
-        // Create success response
-        const successData = {
+        console.log("✅ Data received from Pusher");
+        
+        // Store simple confirmation
+        const storageData = {
           status: "ok",
-          source: body.source || "tally-pusher-final",
-          time: body.time || new Date().toISOString(),
-          message: "Data received successfully",
-          receivedFields: Object.keys(receivedData).filter(key => receivedData[key])
+          source: body.source || "tally-pusher",
+          time: new Date().toISOString(),
+          message: "Data successfully received",
+          data_size: JSON.stringify(body).length,
+          fields_received: Object.keys(body)
         };
 
         // Save to KV
-        await env.REPLICA_DATA.put("latest_tally_data", JSON.stringify(successData));
-        await env.REPLICA_DATA.put("latest_tally_json", JSON.stringify({
+        await env.REPLICA_DATA.put("latest_data", JSON.stringify(storageData));
+        await env.REPLICA_DATA.put("latest_meta", JSON.stringify({
           storedAt: new Date().toISOString(),
-          source: body.source || "tally-pusher-final",
           status: "data_available",
-          counts: {
-            sales: receivedData.salesXml ? 1 : 0,
-            purchase: receivedData.purchaseXml ? 1 : 0,
-            receipt: receivedData.receiptXml ? 1 : 0,
-            payment: receivedData.paymentXml ? 1 : 0,
-            journal: receivedData.journalXml ? 1 : 0,
-            debit: receivedData.debitXml ? 1 : 0,
-            credit: receivedData.creditXml ? 1 : 0,
-            masters: receivedData.mastersXml ? 1 : 0,
-            outstanding: receivedData.outstandingXml ? 1 : 0
-          }
+          source: body.source || "tally-pusher"
         }));
         
-        console.log("✅ Data stored in KV successfully");
+        console.log("💾 Data saved to KV");
         
         return Response.json({
           success: true,
-          message: "Data received and stored successfully",
-          receivedFields: successData.receivedFields,
-          time: successData.time
+          message: "Data stored successfully",
+          received_at: new Date().toISOString(),
+          data_size: storageData.data_size
         }, { headers: cors });
 
       } catch (err) {
-        console.error("Push error:", err.message);
+        console.error("❌ Push error:", err.message);
         return Response.json({ 
-          error: "Processing failed",
+          error: "Failed to process data",
           detail: err.message 
         }, { 
           status: 500, 
@@ -89,30 +66,33 @@ export default {
       }
     }
 
-    // ✅ SIMPLE FETCH ENDPOINT
+    // ✅ ULTRA SIMPLE FETCH ENDPOINT
     if (url.pathname === "/api/imports/latest" && request.method === "GET") {
       try {
-        const data = await env.REPLICA_DATA.get("latest_tally_data");
+        console.log("📤 FETCH ENDPOINT CALLED");
+        
+        const data = await env.REPLICA_DATA.get("latest_data");
         
         if (!data) {
+          console.log("❌ No data in KV");
           return Response.json({ 
             status: "empty", 
-            message: "No data available. Please push data first." 
+            message: "No data available" 
           }, { headers: cors });
         }
 
         const parsedData = JSON.parse(data);
+        console.log("✅ Data found in KV");
         
         return Response.json({
           status: "success",
           message: "Data retrieved successfully",
           data: parsedData,
-          receivedAt: parsedData.time,
-          source: parsedData.source
+          retrieved_at: new Date().toISOString()
         }, { headers: cors });
 
       } catch (e) {
-        console.error("Fetch error:", e.message);
+        console.error("❌ Fetch error:", e.message);
         return Response.json({ 
           error: "Failed to fetch data" 
         }, { 
@@ -122,10 +102,10 @@ export default {
       }
     }
 
-    // ✅ SIMPLE SUMMARY ENDPOINT
+    // ✅ SIMPLE SUMMARY
     if (url.pathname === "/api/summary" && request.method === "GET") {
       try {
-        const meta = await env.REPLICA_DATA.get("latest_tally_json");
+        const meta = await env.REPLICA_DATA.get("latest_meta");
         
         if (!meta) {
           return Response.json({ 
@@ -139,8 +119,7 @@ export default {
           status: "data_available",
           storedAt: metaJson.storedAt,
           source: metaJson.source,
-          counts: metaJson.counts,
-          message: "Data is available at /api/imports/latest"
+          message: "Data is available"
         }, { headers: cors });
 
       } catch (e) {
@@ -154,13 +133,7 @@ export default {
     }
 
     return Response.json({ 
-      error: "Endpoint not found",
-      available_endpoints: [
-        "GET /api/test",
-        "POST /api/push/tally", 
-        "GET /api/imports/latest",
-        "GET /api/summary"
-      ]
+      error: "Endpoint not found" 
     }, { 
       status: 404, 
       headers: cors 
