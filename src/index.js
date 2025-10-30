@@ -137,7 +137,7 @@ function extractTag(xml, tag) {
   return m ? m[1].trim() : "";
 }
 
-// ✅ Excel-style structured parser
+// ✅ Excel-style structured parser (Enhanced for full item mapping)
 function buildExcelStyleRows(xmlString, voucherType) {
   if (!xmlString || xmlString.length < 100) return [];
   const rows = [];
@@ -148,31 +148,60 @@ function buildExcelStyleRows(xmlString, voucherType) {
     const base = {
       "Date": formatTallyDate(extractTag(vXML, "DATE")),
       "Vch No.": extractTag(vXML, "VOUCHERNUMBER"),
-      "Party Name": extractTag(vXML, "PARTYNAME") || extractTag(vXML, "PARTYLEDGERNAME") || extractTag(vXML, "LEDGERNAME"),
-      "City/Area": extractTag(vXML, "PLACEOFSUPPLY") || extractTag(vXML, "ADDRESS"),
-      "State": extractTag(vXML, "STATENAME"),
-      "Salesman": extractTag(vXML, "BASICSALESMANNAME"),
+      "Party Name":
+        extractTag(vXML, "PARTYLEDGERNAME") ||
+        extractTag(vXML, "PARTYNAME") ||
+        extractTag(vXML, "LEDGERNAME") ||
+        "Unknown",
+      "City/Area":
+        extractTag(vXML, "PLACEOFSUPPLY") ||
+        extractTag(vXML, "ADDRESS") ||
+        extractTag(vXML, "LEDSTATENAME") ||
+        "",
+      "State": extractTag(vXML, "STATENAME") || "",
+      "Salesman":
+        extractTag(vXML, "BASICSALESMANNAME") ||
+        extractTag(vXML, "SALESMANNAME") ||
+        extractTag(vXML, "USERDESCRIPTION") ||
+        "Unknown",
       "Vch Type": extractTag(vXML, "VOUCHERTYPENAME") || voucherType,
       "ItemName": "",
+      "Item Group": "",
+      "Item Category": "",
       "Qty": "",
       "Rate": "",
       "Amount": parseFloat(extractTag(vXML, "AMOUNT") || "0"),
     };
 
-    const itemMatches = vXML.matchAll(/<INVENTORYENTRIES\.LIST[^>]*>([\s\S]*?)<\/INVENTORYENTRIES\.LIST>/g);
+    const itemMatches = vXML.matchAll(
+      /<INVENTORYENTRIES\.LIST[^>]*>([\s\S]*?)<\/INVENTORYENTRIES\.LIST>/g
+    );
+
     let found = false;
     for (const iMatch of itemMatches) {
       found = true;
       const iXML = iMatch[1];
       const row = { ...base };
-      row["ItemName"] = extractTag(iXML, "STOCKITEMNAME");
-      row["Qty"] = extractTag(iXML, "ACTUALQTY");
-      row["Rate"] = extractTag(iXML, "RATE");
+      row["ItemName"] = extractTag(iXML, "STOCKITEMNAME") || "Unknown";
+      row["Item Group"] =
+        extractTag(iXML, "STOCKITEMGROUPNAME") ||
+        extractTag(iXML, "PARENTITEM") ||
+        "Unknown";
+      row["Item Category"] =
+        extractTag(iXML, "CATEGORY") ||
+        extractTag(iXML, "STOCKCATEGORY") ||
+        extractTag(iXML, "ITEMCATEGORYNAME") ||
+        "Unknown";
+      row["Qty"] = extractTag(iXML, "ACTUALQTY") || extractTag(iXML, "BILLEDQTY") || "";
+      row["Rate"] = extractTag(iXML, "RATE") || "";
       row["Amount"] = parseFloat(extractTag(iXML, "AMOUNT") || "0");
       rows.push(row);
     }
+
+    // अगर कोई inventory entry नहीं मिली तो भी एक बेसिक row add करो
     if (!found) rows.push(base);
   }
+
   return rows;
 }
 
