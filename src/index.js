@@ -105,45 +105,61 @@ export default {
     }
 
     // ✅ डेटा लाने वाला endpoint
-    if (url.pathname === "/api/imports/latest" && request.method === "GET") {
-      try {
-        console.log("📤 डेटा भेज रहे हैं...");
-        
-        const data = await env.REPLICA_DATA.get("latest_data");
-        
-        if (!data) {
-          console.log("❌ KV में कोई डेटा नहीं है");
-          return Response.json({ 
-            status: "empty", 
-            message: "No data available",
-            rows: {
-              sales: [],
-              purchase: [],
-              receipt: [],
-              payment: [],
-              journal: [],
-              debit: [],
-              credit: []
-            }
-          }, { headers: cors });
-        }
 
-        const parsedData = JSON.parse(data);
-        console.log(`✅ ${parsedData.totalRows} rows भेज रहे हैं`);
-        
-        return Response.json(parsedData, { headers: cors });
+// ✅ डेटा लाने वाला endpoint (Final Fixed Version)
+if (url.pathname === "/api/imports/latest" && request.method === "GET") {
+  try {
+    console.log("📤 डेटा भेज रहे हैं...");
 
-      } catch (e) {
-        console.error("❌ Fetch error:", e.message);
-        return Response.json({ 
-          error: "Failed to fetch data",
-          detail: e.message
-        }, { 
-          status: 500, 
-          headers: cors 
-        });
-      }
+    const data = await env.REPLICA_DATA.get("latest_data");
+
+    if (!data) {
+      console.log("❌ KV में कोई डेटा नहीं है");
+      return Response.json({
+        status: "empty",
+        message: "No data available",
+        sales: [],
+        purchase: [],
+        receipt: [],
+        payment: [],
+        journal: [],
+        debit: [],
+        credit: [],
+      }, { headers: cors });
     }
+
+    const parsedData = JSON.parse(data);
+    console.log(`✅ ${parsedData.totalRows} rows भेज रहे हैं`);
+
+    // 👇 Flatten करके frontend के लिए साफ output दो
+    const { rows } = parsedData;
+    return Response.json({
+      status: "ok",
+      storedAt: parsedData.storedAt,
+      source: parsedData.source,
+      totalRows: parsedData.totalRows,
+      counts: parsedData.counts,
+      sales: rows.sales || [],
+      purchase: rows.purchase || [],
+      receipt: rows.receipt || [],
+      payment: rows.payment || [],
+      journal: rows.journal || [],
+      debit: rows.debit || [],
+      credit: rows.credit || [],
+    }, { headers: cors });
+
+  } catch (e) {
+    console.error("❌ Fetch error:", e.message);
+    return Response.json({
+      error: "Failed to fetch data",
+      detail: e.message,
+    }, {
+      status: 500,
+      headers: cors,
+    });
+  }
+}
+
 
     // ✅ Summary endpoint
     if (url.pathname === "/api/summary" && request.method === "GET") {
