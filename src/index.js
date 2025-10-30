@@ -15,7 +15,7 @@ export default {
     if (url.pathname === "/api/test")
       return Response.json({ status: "ok", message: "Backend Live", time: new Date().toISOString() }, { headers: cors });
 
-    // ✅ असली Tally डेटा स्टोर करने वाला endpoint
+    // ✅ Tally डेटा स्टोर करने वाला endpoint
     if (url.pathname === "/api/push/tally" && request.method === "POST") {
       try {
         const body = await request.json();
@@ -33,15 +33,15 @@ export default {
           }
         }
 
-        // ✅ Excel-Style Structured Rows बनाओ
+        // ✅ Excel-Style Perfect Rows बनाओ
         const parsedRows = {
-          sales: buildExcelStyleRows(decompressedData.sales || "", "Sales"),
-          purchase: buildExcelStyleRows(decompressedData.purchase || "", "Purchase"),
-          receipt: buildExcelStyleRows(decompressedData.receipt || "", "Receipt"),
-          payment: buildExcelStyleRows(decompressedData.payment || "", "Payment"),
-          journal: buildExcelStyleRows(decompressedData.journal || "", "Journal"),
-          debit: buildExcelStyleRows(decompressedData.debitNote || "", "Debit Note"),
-          credit: buildExcelStyleRows(decompressedData.creditNote || "", "Credit Note"),
+          sales: buildExcelRows(decompressedData.sales || "", "Sales"),
+          purchase: buildExcelRows(decompressedData.purchase || "", "Purchase"),
+          receipt: buildExcelRows(decompressedData.receipt || "", "Receipt"),
+          payment: buildExcelRows(decompressedData.payment || "", "Payment"),
+          journal: buildExcelRows(decompressedData.journal || "", "Journal"),
+          debit: buildExcelRows(decompressedData.debitNote || "", "Debit Note"),
+          credit: buildExcelRows(decompressedData.creditNote || "", "Credit Note"),
         };
 
         const totalRows = Object.values(parsedRows).reduce((a, b) => a + b.length, 0);
@@ -137,76 +137,72 @@ function extractTag(xml, tag) {
   return m ? m[1].trim() : "";
 }
 
-// ✅ Excel-style structured parser (Enhanced for full item mapping)
-function buildExcelStyleRows(xmlString, voucherType) {
+// ✅ Date formatter
+function formatTallyDate(d) {
+  if (!d || d.length !== 8) return d;
+  return `${d.slice(6, 8)}-${d.slice(4, 6)}-${d.slice(0, 4)}`;
+}
+
+// ✅ PERFECT Excel-style Row Builder (तुम्हारे exact columns के साथ)
+function buildExcelRows(xmlString, voucherType) {
   if (!xmlString || xmlString.length < 100) return [];
   const rows = [];
   const voucherMatches = xmlString.matchAll(/<VOUCHER[^>]*>([\s\S]*?)<\/VOUCHER>/g);
+  
+  let srNo = 1;
 
   for (const match of voucherMatches) {
     const vXML = match[1];
+    
+    // Base voucher info
     const base = {
+      "Sr.No": srNo++,
       "Date": formatTallyDate(extractTag(vXML, "DATE")),
       "Vch No.": extractTag(vXML, "VOUCHERNUMBER"),
-      "Party Name":
-        extractTag(vXML, "PARTYLEDGERNAME") ||
-        extractTag(vXML, "PARTYNAME") ||
-        extractTag(vXML, "LEDGERNAME") ||
-        "Unknown",
-      "City/Area":
-        extractTag(vXML, "PLACEOFSUPPLY") ||
-        extractTag(vXML, "ADDRESS") ||
-        extractTag(vXML, "LEDSTATENAME") ||
-        "",
-      "State": extractTag(vXML, "STATENAME") || "",
-      "Salesman":
-        extractTag(vXML, "BASICSALESMANNAME") ||
-        extractTag(vXML, "SALESMANNAME") ||
-        extractTag(vXML, "USERDESCRIPTION") ||
-        "Unknown",
-      "Vch Type": extractTag(vXML, "VOUCHERTYPENAME") || voucherType,
+      "Party Name": extractTag(vXML, "PARTYLEDGERNAME") || extractTag(vXML, "PARTYNAME") || extractTag(vXML, "LEDGERNAME") || "",
+      "City/Area": extractTag(vXML, "PLACEOFSUPPLY") || extractTag(vXML, "ADDRESS") || extractTag(vXML, "LEDSTATENAME") || "",
+      "Party Group": extractTag(vXML, "PARENT") || extractTag(vXML, "PARTYGROUP") || "",
+      "State": extractTag(vXML, "STATENAME") || extractTag(vXML, "PARTYSTATENAME") || "",
       "ItemName": "",
       "Item Group": "",
       "Item Category": "",
       "Qty": "",
+      "Alt Qty": "",
       "Rate": "",
+      "UOM": "",
+      "Salesman": extractTag(vXML, "BASICSALESMANNAME") || extractTag(vXML, "SALESMANNAME") || extractTag(vXML, "USERDESCRIPTION") || "",
+      "Vch Type": extractTag(vXML, "VOUCHERTYPENAME") || voucherType,
       "Amount": parseFloat(extractTag(vXML, "AMOUNT") || "0"),
     };
 
-    const itemMatches = vXML.matchAll(
-      /<INVENTORYENTRIES\.LIST[^>]*>([\s\S]*?)<\/INVENTORYENTRIES\.LIST>/g
-    );
+    // Inventory entries से item details निकालो
+    const itemMatches = vXML.matchAll(/<INVENTORYENTRIES\.LIST[^>]*>([\s\S]*?)<\/INVENTORYENTRIES\.LIST>/g);
 
     let found = false;
     for (const iMatch of itemMatches) {
       found = true;
       const iXML = iMatch[1];
       const row = { ...base };
-      row["ItemName"] = extractTag(iXML, "STOCKITEMNAME") || "Unknown";
-      row["Item Group"] =
-        extractTag(iXML, "STOCKITEMGROUPNAME") ||
-        extractTag(iXML, "PARENTITEM") ||
-        "Unknown";
-      row["Item Category"] =
-        extractTag(iXML, "CATEGORY") ||
-        extractTag(iXML, "STOCKCATEGORY") ||
-        extractTag(iXML, "ITEMCATEGORYNAME") ||
-        "Unknown";
-      row["Qty"] = extractTag(iXML, "ACTUALQTY") || extractTag(iXML, "BILLEDQTY") || "";
+      
+      row["ItemName"] = extractTag(iXML, "STOCKITEMNAME") || "";
+      row["Item Group"] = extractTag(iXML, "STOCKITEMGROUPNAME") || extractTag(iXML, "PARENTITEM") || "";
+      row["Item Category"] = extractTag(iXML, "CATEGORY") || extractTag(iXML, "STOCKCATEGORY") || extractTag(iXML, "ITEMCATEGORYNAME") || "";
+      
+      const qtyStr = extractTag(iXML, "ACTUALQTY") || extractTag(iXML, "BILLEDQTY") || "";
+      row["Qty"] = qtyStr.replace(/[^0-9.-]/g, "").trim();
+      row["Alt Qty"] = extractTag(iXML, "ALTERNATEQTY") || "";
       row["Rate"] = extractTag(iXML, "RATE") || "";
+      row["UOM"] = qtyStr.replace(/[0-9.-]/g, "").trim() || extractTag(iXML, "UOM") || "";
       row["Amount"] = parseFloat(extractTag(iXML, "AMOUNT") || "0");
+      
       rows.push(row);
     }
 
-    // अगर कोई inventory entry नहीं मिली तो भी एक बेसिक row add करो
-    if (!found) rows.push(base);
+    // अगर कोई inventory entry नहीं मिली तो basic row add करो
+    if (!found) {
+      rows.push(base);
+    }
   }
 
   return rows;
-}
-
-// ✅ Date formatter
-function formatTallyDate(d) {
-  if (!d || d.length !== 8) return d;
-  return `${d.slice(6, 8)}-${d.slice(4, 6)}-${d.slice(0, 4)}`;
 }
