@@ -49,16 +49,17 @@ export default {
           }
         }
 
-        // अब असली डेटा को parse करके rows में बदलो
-        const parsedRows = {
-          sales: parseXMLToRows(decompressedData.sales || "", "sales"),
-          purchase: parseXMLToRows(decompressedData.purchase || "", "purchase"),
-          receipt: parseXMLToRows(decompressedData.receipt || "", "receipt"),
-          payment: parseXMLToRows(decompressedData.payment || "", "payment"),
-          journal: parseXMLToRows(decompressedData.journal || "", "journal"),
-          debit: parseXMLToRows(decompressedData.debitNote || "", "debit"),
-          credit: parseXMLToRows(decompressedData.creditNote || "", "credit"),
-        };
+// ✅ अब Excel-style rows में बदलो (Tally XML → Structured JSON)
+const parsedRows = {
+  sales: buildExcelStyleRows(decompressedData.sales || "", "Sales"),
+  purchase: buildExcelStyleRows(decompressedData.purchase || "", "Purchase"),
+  receipt: buildExcelStyleRows(decompressedData.receipt || "", "Receipt"),
+  payment: buildExcelStyleRows(decompressedData.payment || "", "Payment"),
+  journal: buildExcelStyleRows(decompressedData.journal || "", "Journal"),
+  debit: buildExcelStyleRows(decompressedData.debitNote || "", "Debit Note"),
+  credit: buildExcelStyleRows(decompressedData.creditNote || "", "Credit Note"),
+};
+
 
         // Count निकालो
         const totalRows = Object.values(parsedRows).reduce((sum, arr) => sum + arr.length, 0);
@@ -308,4 +309,53 @@ function extractTag(xml, tagName) {
   const regex = new RegExp(`<${tagName}[^>]*>([^<]*)<\/${tagName}>`, 'i');
   const match = xml.match(regex);
   return match ? match[1].trim() : "";
+}
+
+// ✅ Excel-style JSON builder (manual header mapping)
+function buildExcelStyleRows(xmlString, voucherType) {
+  if (!xmlString || xmlString.length < 100) return [];
+  const rows = [];
+  try {
+    const voucherMatches = xmlString.matchAll(/<VOUCHER[^>]*>([\s\S]*?)<\/VOUCHER>/g);
+    for (const match of voucherMatches) {
+      const voucherXML = match[1];
+
+      const row = {
+        "Date": extractTag(voucherXML, "DATE"),
+        "Vch No.": extractTag(voucherXML, "VOUCHERNUMBER"),
+        "Party Name": extractTag(voucherXML, "PARTYNAME"),
+        "City/Area": extractTag(voucherXML, "PLACEOFSUPPLY") || extractTag(voucherXML, "ADDRESS"),
+        "Party Group": extractTag(voucherXML, "PARENT"),
+        "State": extractTag(voucherXML, "STATENAME"),
+        "ItemName": "",
+        "Item Group": "",
+        "Item Category": "",
+        "Qty": "",
+        "Alt Qty": "",
+        "Rate": "",
+        "UOM": "",
+        "Salesman": extractTag(voucherXML, "BASICSALESMANNAME"),
+        "Vch Type": extractTag(voucherXML, "VOUCHERTYPENAME"),
+        "Amount": parseFloat(extractTag(voucherXML, "AMOUNT") || "0"),
+      };
+
+      // Items detail निकालो
+      const itemMatches = voucherXML.matchAll(/<INVENTORYENTRIES\.LIST[^>]*>([\s\S]*?)<\/INVENTORYENTRIES\.LIST>/g);
+      for (const itemMatch of itemMatches) {
+        const itemXML = itemMatch[1];
+        const copy = { ...row };
+        copy["ItemName"] = extractTag(itemXML, "STOCKITEMNAME");
+        copy["Qty"] = extractTag(itemXML, "ACTUALQTY");
+        copy["Rate"] = extractTag(itemXML, "RATE");
+        copy["Amount"] = parseFloat(extractTag(itemXML, "AMOUNT") || "0");
+        copy["UOM"] = extractTag(itemXML, "BILLEDQTY").replace(/[0-9.]/g, "").trim() || "";
+        rows.push(copy);
+      }
+
+      if (rows.length === 0) rows.push(row);
+    }
+  } catch (err) {
+    console.error("Excel-style parse error:", err.message);
+  }
+  return rows;
 }
