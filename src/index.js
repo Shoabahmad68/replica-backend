@@ -13,12 +13,32 @@ export default {
     if (url.pathname === "/")
       return new Response("Replica Backend Active ✅", { headers: cors });
 
+    // Receive new data from Tally connector
     if (url.pathname === "/api/push/tally" && request.method === "POST") {
       const body = await request.json();
-      await env.REPLICA_DATA.put("latest_data", JSON.stringify(body));
-      return Response.json({ success: true, stored: Object.keys(body.allData) }, { headers: cors });
+      let existing = await env.REPLICA_DATA.get("latest_data");
+      let newData = {};
+
+      try {
+        if (existing) newData = JSON.parse(existing);
+      } catch (e) {}
+
+      // Auto-append or update incoming data
+      newData = {
+        ...newData,
+        company: body.company,
+        lastSync: new Date().toISOString(),
+        allData: {
+          ...newData.allData,
+          ...body.allData
+        }
+      };
+
+      await env.REPLICA_DATA.put("latest_data", JSON.stringify(newData));
+      return Response.json({ success: true, stored: Object.keys(newData.allData) }, { headers: cors });
     }
 
+    // Fetch latest synced data
     if (url.pathname === "/api/imports/latest" && request.method === "GET") {
       const data = await env.REPLICA_DATA.get("latest_data");
       if (!data)
